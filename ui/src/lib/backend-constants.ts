@@ -58,11 +58,11 @@ export const DEFAULT_MCP_TARGET = {
 };
 
 export const BACKEND_TYPES = [
-  { value: "mcp", label: "MCP", icon: "Target" },
-  { value: "ai", label: "AI", icon: "Brain" },
-  { value: "service", label: "Service", icon: "Cloud" },
-  { value: "host", label: "Host", icon: "Server" },
-  { value: "dynamic", label: "Dynamic", icon: "Globe" },
+  { value: "mcp", label: "MCP", icon: "Target", hiddenFromUI: false },
+  { value: "ai", label: "AI", icon: "Brain", hiddenFromUI: true },
+  { value: "service", label: "Service", icon: "Cloud", hiddenFromUI: true },
+  { value: "host", label: "Host", icon: "Server", hiddenFromUI: true },
+  { value: "dynamic", label: "Dynamic", icon: "Globe", hiddenFromUI: true },
 ] as const;
 
 export const BACKEND_TABLE_HEADERS = [

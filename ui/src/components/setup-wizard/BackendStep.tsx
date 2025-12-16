@@ -370,7 +370,8 @@ export function BackendStep({ onNext, onPrevious, config, onConfigChange }: Back
           </div>
 
           <div className="space-y-4">
-            <div className="space-y-3">
+            {/* MCP-only mode: Backend type selection hidden, defaulting to MCP */}
+            {/* <div className="space-y-3">
               <Label>Backend Type</Label>
               <RadioGroup
                 value={backendType}
@@ -392,7 +393,7 @@ export function BackendStep({ onNext, onPrevious, config, onConfigChange }: Back
                   </Label>
                 </div>
               </RadioGroup>
-            </div>
+            </div> */}
 
             {renderBackendConfig()}
           </div>

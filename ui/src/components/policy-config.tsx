@@ -176,6 +176,7 @@ export function PolicyConfig() {
   const getAvailablePolicyTypes = (routeType: "http" | "tcp") => {
     return Object.entries(POLICY_TYPES)
       .filter(([_, info]) => {
+        if (info.hiddenFromUI) return false;
         if (routeType === "http") return !info.tcpOnly;
         if (routeType === "tcp") return !info.httpOnly;
         return true;

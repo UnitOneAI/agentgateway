@@ -39,6 +39,7 @@ export interface PolicyTypeInfo {
   description: string;
   httpOnly?: boolean;
   tcpOnly?: boolean;
+  hiddenFromUI?: boolean;
 }
 
 export const POLICY_TYPES: Record<PolicyType, PolicyTypeInfo> = {
@@ -141,12 +142,14 @@ export const POLICY_TYPES: Record<PolicyType, PolicyTypeInfo> = {
     icon: Zap,
     description: "AI/LLM policy configuration",
     httpOnly: true,
+    hiddenFromUI: true,
   },
   a2a: {
     name: "Agent-to-Agent",
     icon: Users,
     description: "Mark this traffic as A2A to enable A2A processing and telemetry",
     httpOnly: true,
+    hiddenFromUI: true,
   },
 };
 

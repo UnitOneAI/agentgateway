@@ -84,10 +84,7 @@ export default function BackendsPage() {
             <Target className="h-8 w-8 text-primary" />
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Backends</h1>
-              <p className="text-muted-foreground mt-1">
-                Configure backend services including MCP targets, AI providers, and service
-                connections
-              </p>
+              <p className="text-muted-foreground mt-1">Configure MCP backend targets</p>
             </div>
           </div>
           {!isLoading && backendStats.totalBackends > 0 && (
@@ -105,7 +102,8 @@ export default function BackendsPage() {
                   <span>{backendStats.mcpBackends} MCP</span>
                 </div>
               )}
-              {backendStats.aiBackends > 0 && (
+              {/* MCP-only mode: hiding non-MCP backend stats */}
+              {/* {backendStats.aiBackends > 0 && (
                 <div className="flex items-center space-x-2">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                   <span>{backendStats.aiBackends} AI</span>
@@ -128,7 +126,7 @@ export default function BackendsPage() {
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                   <span>{backendStats.dynamicBackends} Dynamic</span>
                 </div>
-              )}
+              )} */}
             </div>
           )}
         </div>

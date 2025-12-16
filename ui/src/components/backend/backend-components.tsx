@@ -374,7 +374,7 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
           <div className="space-y-2">
             <Label>Backend Type *</Label>
             <div className="grid grid-cols-2 gap-2">
-              {BACKEND_TYPES.map(({ value, label, icon }) => {
+              {BACKEND_TYPES.filter((t) => !t.hiddenFromUI).map(({ value, label, icon }) => {
                 const IconComponent = {
                   Target,
                   Brain,
