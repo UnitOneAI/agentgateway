@@ -1,2 +1,13 @@
 # Minimal configuration for Azure deployment
 # This will be overridden by Container App environment variables
+binds:
+- port: 8080
+  listeners:
+  - routes:
+    - backends:
+      - mcp:
+          targets:
+          - name: echo
+            stdio:
+              cmd: echo
+              args: ["MCP Available"]
