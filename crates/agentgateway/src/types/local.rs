@@ -372,6 +372,7 @@ impl LocalBackend {
 						McpPrefixMode::Always => true,
 						McpPrefixMode::Conditional => false,
 					}),
+				security_guards: vec![],
 				};
 				backends.push(Backend::MCP(name, m).into());
 				backends

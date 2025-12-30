@@ -668,6 +668,7 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 						proto::agent::mcp_backend::PrefixMode::Always => true,
 						proto::agent::mcp_backend::PrefixMode::Conditional => false,
 					},
+					security_guards: vec![],
 				},
 			),
 			None => {
