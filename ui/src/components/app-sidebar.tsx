@@ -90,7 +90,7 @@ export function AppSidebar({ setActiveView }: AppSidebarProps) {
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border">
         <div className="p-4 flex items-center gap-3">
-          <AgentgatewayLogo className="h-9 w-9" width={36} height={36} />
+          <AgentgatewayLogo className="h-9 w-9" />
           <div className="flex flex-col">
             <span className="text-base font-semibold">{themeConfig.branding.name}</span>
             <span className="text-xs text-sidebar-muted">{themeConfig.branding.tagline}</span>
