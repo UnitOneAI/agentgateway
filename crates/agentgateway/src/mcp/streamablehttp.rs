@@ -241,15 +241,21 @@ impl StreamableHttpService {
 }
 
 fn http_error(status: StatusCode, body: impl Into<http::Body>) -> Response {
+	// MCP protocol requires all responses to be SSE streams, even errors
 	::http::Response::builder()
 		.status(status)
+		.header(http::header::CONTENT_TYPE, EVENT_STREAM_MIME_TYPE)
+		.header(http::header::CACHE_CONTROL, "no-cache")
 		.body(body.into())
 		.expect("valid response")
 }
 
 fn internal_error_response(context: &str) -> Response {
+	// MCP protocol requires all responses to be SSE streams, even errors
 	::http::Response::builder()
 		.status(StatusCode::INTERNAL_SERVER_ERROR)
+		.header(http::header::CONTENT_TYPE, EVENT_STREAM_MIME_TYPE)
+		.header(http::header::CACHE_CONTROL, "no-cache")
 		.body(http::Body::from(format!(
 			"Encounter an error when {context}"
 		)))
