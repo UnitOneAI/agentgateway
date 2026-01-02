@@ -24,6 +24,7 @@ binds:
     - name: mcp-route
       backends:
       - mcp:
+          name: pii-test-server
           # PII MCP Test Server (HTTPS)
           targets:
           - http:
