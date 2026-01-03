@@ -27,5 +27,6 @@ binds:
           name: pii-test-server
           # PII MCP Test Server (HTTPS)
           targets:
-          - http:
+          - name: pii-test-server-target
+            mcp:
               host: https://mcp-pii-test-server.whitecliff-a0c9f0f7.eastus2.azurecontainerapps.io/mcp
