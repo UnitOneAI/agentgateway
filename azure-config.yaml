@@ -1,5 +1,34 @@
 # Azure Container App Configuration
 # Exposes both UI and MCP on port 8080
+#
+# CRITICAL ROUTING FIX - Commit 342a661:
+# All routes MUST have explicit path matching with "matches" sections.
+# Routes without explicit matches default to PathMatch::PathPrefix("/"),
+# giving them LOWER priority than routes with explicit matchers.
+#
+# This caused E2E test failures when MCP route was missing explicit matching.
+# The gateway would match /mcp requests against ui-route or admin-api-route
+# instead of mcp-route, resulting in HTTP 422/406 errors.
+#
+# For Terraform migration:
+# When implementing this configuration in Terraform (azurerm_container_app),
+# ensure ALL routes include explicit path matching to prevent priority issues:
+#
+# resource "azurerm_container_app" "gateway" {
+#   ...
+#   ingress {
+#     traffic_weight {
+#       ...
+#     }
+#     custom_domain {
+#       ...
+#     }
+#   }
+#   # Configure config file via environment variable or volume mount
+# }
+#
+# Key requirement: Every route definition MUST include a "matches" section
+# with explicit path matching (e.g., pathPrefix: /mcp, /ui, /config)
 binds:
 - port: 8080
   listeners:
@@ -22,11 +51,13 @@ binds:
 
     # MCP routes
     - name: mcp-route
+      matches:
+      - path:
+          pathPrefix: /mcp
       backends:
       - mcp:
-          name: pii-test-server
-          # PII MCP Test Server (HTTPS)
+          # PII MCP Test Server (Internal URL - same Container Apps Environment)
           targets:
           - name: pii-test-server-target
             mcp:
-              host: https://mcp-pii-test-server.whitecliff-a0c9f0f7.eastus2.azurecontainerapps.io/mcp
+              host: http://mcp-pii-test-server/mcp
