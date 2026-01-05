@@ -217,12 +217,20 @@ mod tests {
     use super::*;
     use rmcp::model::Tool;
     use std::borrow::Cow;
+    use std::sync::Arc;
 
     fn create_test_tool(name: &str, description: Option<&str>) -> Tool {
         Tool {
-            name: Cow::Borrowed(name),
-            description: description.map(Cow::Borrowed),
-            input_schema: serde_json::json!({"type": "object"}),
+            name: Cow::Owned(name.to_string()),
+            description: description.map(|s| Cow::Owned(s.to_string())),
+            icons: None,
+            title: None,
+            input_schema: Arc::new(
+                serde_json::from_value(serde_json::json!({"type": "object"}))
+                    .unwrap()
+            ),
+            annotations: None,
+            output_schema: None,
         }
     }
 

@@ -421,6 +421,7 @@ impl TestBind {
 				})],
 				stateful,
 				always_use_prefix: false,
+				security_guards: vec![],
 			},
 		);
 		{
@@ -468,6 +469,7 @@ impl TestBind {
 					.collect_vec(),
 				stateful,
 				always_use_prefix: false,
+				security_guards: vec![],
 			},
 		);
 		{

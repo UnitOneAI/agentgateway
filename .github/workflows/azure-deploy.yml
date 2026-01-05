@@ -1,0 +1,174 @@
+name: Azure Deployment
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: 'dev'
+      tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+
+env:
+  REGISTRY: agwimages.azurecr.io
+  IMAGE_NAME: unitone-agentgateway
+
+jobs:
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      image-tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - name: Determine environment and tag
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "release" ]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine image tag
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "release" ]; then
+            # Use release tag (e.g., v1.0.0 -> 1.0.0)
+            TAG="${{ github.event.release.tag_name }}"
+            TAG="${TAG#v}"  # Remove leading 'v'
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # Use short commit SHA for dev builds
+            echo "tag=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-deploy:
+    needs: determine-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push to ACR
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+          IMAGE_TAG: ${{ needs.determine-environment.outputs.image-tag }}
+        run: |
+          ACR_NAME="unitoneagw${ENVIRONMENT}acr"
+          TIMESTAMP_TAG=$(date +%Y%m%d-%H%M%S)
+
+          echo "Building and pushing image to ${ACR_NAME}..."
+          echo "Tags: ${IMAGE_TAG}, ${TIMESTAMP_TAG}, latest"
+
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --image "${IMAGE_NAME}:${TIMESTAMP_TAG}" \
+            --image "${IMAGE_NAME}:latest" \
+            --file Dockerfile.acr \
+            --platform linux/amd64 \
+            .
+
+      - name: Deploy to Azure Container Apps
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+          IMAGE_TAG: ${{ needs.determine-environment.outputs.image-tag }}
+        run: |
+          RESOURCE_GROUP="unitone-agw-${ENVIRONMENT}-rg"
+          LOCATION="eastus2"
+          PARAMETERS_FILE="deploy/bicep/parameters-${ENVIRONMENT}.json"
+
+          # Get current subscription ID
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+
+          # Update parameter file with subscription ID (create backup)
+          sed -i.bak "s|<SUBSCRIPTION_ID>|${SUBSCRIPTION_ID}|g" "${PARAMETERS_FILE}"
+
+          echo "Deploying to ${RESOURCE_GROUP}..."
+
+          az deployment group create \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file deploy/bicep/main.bicep \
+            --parameters "@${PARAMETERS_FILE}" \
+            --parameters imageTag="${IMAGE_TAG}" \
+            --name "agw-deployment-$(date +%Y%m%d-%H%M%S)" \
+            --verbose
+
+          # Restore backup
+          mv "${PARAMETERS_FILE}.bak" "${PARAMETERS_FILE}"
+
+      - name: Get deployment outputs
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+        run: |
+          RESOURCE_GROUP="unitone-agw-${ENVIRONMENT}-rg"
+          APP_NAME="unitone-agw-${ENVIRONMENT}-app"
+
+          # Get Container App URL
+          FQDN=$(az containerapp show \
+            --name "${APP_NAME}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)
+
+          if [ -n "$FQDN" ]; then
+            echo "::notice::Deployment successful! UI URL: https://${FQDN}/ui"
+            echo "::notice::MCP Endpoint: https://${FQDN}/mcp"
+          fi
+
+      - name: Verify deployment health
+        env:
+          ENVIRONMENT: ${{ needs.determine-environment.outputs.environment }}
+        run: |
+          RESOURCE_GROUP="unitone-agw-${ENVIRONMENT}-rg"
+          APP_NAME="unitone-agw-${ENVIRONMENT}-app"
+
+          echo "Checking Container App health..."
+
+          # Get running status
+          PROVISIONING_STATE=$(az containerapp show \
+            --name "${APP_NAME}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --query "properties.provisioningState" \
+            -o tsv)
+
+          RUNNING_STATE=$(az containerapp show \
+            --name "${APP_NAME}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --query "properties.runningStatus" \
+            -o tsv)
+
+          echo "Provisioning State: ${PROVISIONING_STATE}"
+          echo "Running State: ${RUNNING_STATE}"
+
+          if [ "${PROVISIONING_STATE}" != "Succeeded" ] || [ "${RUNNING_STATE}" != "Running" ]; then
+            echo "::error::Container App is not healthy!"
+            exit 1
+          fi
+
+          echo "::notice::Container App is healthy and running!"
