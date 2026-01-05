@@ -4,7 +4,6 @@
 // Expected latency: < 1ms per guard
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 mod tool_poisoning;
 mod rug_pull;
@@ -35,6 +34,11 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            tool_name = %tool_name,
+            server = %context.server_name,
+            "NativeGuard::evaluate_tool_invoke called (default impl)"
+        );
         let _ = (tool_name, arguments, context);
         Ok(GuardDecision::Allow)
     }
@@ -46,6 +50,10 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            server = %context.server_name,
+            "NativeGuard::evaluate_request called (default impl)"
+        );
         let _ = (request, context);
         Ok(GuardDecision::Allow)
     }
@@ -57,6 +65,10 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            server = %context.server_name,
+            "NativeGuard::evaluate_response called (default impl)"
+        );
         let _ = (response, context);
         Ok(GuardDecision::Allow)
     }
@@ -71,6 +83,7 @@ pub(crate) fn build_regex_set(patterns: &[String]) -> Result<Vec<Regex>, regex::
 }
 
 /// Helper: Check if text matches any pattern
+#[allow(dead_code)]
 pub(crate) fn matches_any(text: &str, patterns: &[Regex]) -> bool {
     patterns.iter().any(|p| p.is_match(text))
 }

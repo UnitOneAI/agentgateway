@@ -16,6 +16,7 @@ schema = ["schemars"]
 tls-ring = ["rustls/ring", "tokio-rustls/ring"]
 internal_benches = ["divan"]
 testing = ["dep:reqwest"]
+wasm-guards = []
 
 [dependencies]
 a2a-sdk.workspace = true

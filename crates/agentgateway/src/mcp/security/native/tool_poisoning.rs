@@ -12,11 +12,13 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+#[allow(unused_imports)]
 use super::{build_regex_set, matches_any, NativeGuard};
 use crate::mcp::security::{DenyReason, GuardContext, GuardDecision, GuardError, GuardResult};
 
 /// Configuration for Tool Poisoning Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ToolPoisoningConfig {
     /// Enable strict mode (blocks on any suspicious pattern)
@@ -49,6 +51,7 @@ fn default_alert_threshold() -> usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ScanField {
     Name,
@@ -130,6 +133,11 @@ impl NativeGuard for ToolPoisoningDetector {
         tools: &[rmcp::model::Tool],
         _context: &GuardContext,
     ) -> GuardResult {
+        tracing::info!(
+            tool_count = tools.len(),
+            strict_mode = self.config.strict_mode,
+            "ToolPoisoningDetector::evaluate_tools_list called"
+        );
         let mut all_violations = Vec::new();
 
         for tool in tools {

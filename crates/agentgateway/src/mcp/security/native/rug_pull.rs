@@ -16,6 +16,7 @@ use crate::mcp::security::{GuardContext, GuardDecision, GuardResult};
 
 /// Configuration for Rug Pull Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RugPullConfig {
     /// Enable baseline tracking
@@ -53,6 +54,7 @@ impl NativeGuard for RugPullDetector {
         _tools: &[rmcp::model::Tool],
         _context: &GuardContext,
     ) -> GuardResult {
+        tracing::info!("RugPullDetector::evaluate_tools_list called");
         // TODO: Implement baseline comparison and change detection
         // For now, always allow
         Ok(GuardDecision::Allow)

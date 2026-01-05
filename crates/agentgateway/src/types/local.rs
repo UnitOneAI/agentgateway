@@ -372,7 +372,7 @@ impl LocalBackend {
 						McpPrefixMode::Always => true,
 						McpPrefixMode::Conditional => false,
 					}),
-				security_guards: vec![],
+					security_guards: tgt.security_guards.clone(),
 				};
 				backends.push(Backend::MCP(name, m).into());
 				backends
@@ -427,6 +427,8 @@ pub struct LocalMcpBackend {
 	pub stateful_mode: McpStatefulMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub prefix_mode: Option<McpPrefixMode>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub security_guards: Vec<crate::mcp::security::McpSecurityGuard>,
 }
 
 #[apply(schema_de!)]

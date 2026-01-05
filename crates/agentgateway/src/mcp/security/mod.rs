@@ -20,6 +20,7 @@ pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, 
 
 /// Security guard that can be applied to MCP protocol operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct McpSecurityGuard {
     /// Unique identifier for this guard
     pub id: String,
@@ -67,6 +68,7 @@ fn default_enabled() -> bool {
 
 /// Guard implementation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpGuardKind {
     /// Tool Poisoning Detection (native)
@@ -88,6 +90,7 @@ pub enum McpGuardKind {
 
 /// Execution phase for guards
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GuardPhase {
     /// Before forwarding client request to MCP server
@@ -111,6 +114,7 @@ impl Default for GuardPhase {
 
 /// How to behave when guard execution fails (timeout, error, etc.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum FailureMode {
     /// Block request on failure (secure default)
@@ -271,6 +275,12 @@ impl GuardExecutor {
 		tools: &[rmcp::model::Tool],
 		context: &GuardContext,
 	) -> GuardResult {
+		tracing::info!(
+			guard_count = self.guards.len(),
+			tool_count = tools.len(),
+			server = %context.server_name,
+			"GuardExecutor::evaluate_tools_list called"
+		);
 		for guard_entry in self.guards.iter() {
 			// Only run guards configured for ToolsList or Response phase
 			if !guard_entry.config.runs_on.contains(&GuardPhase::ToolsList)

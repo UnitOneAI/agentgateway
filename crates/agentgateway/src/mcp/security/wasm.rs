@@ -11,6 +11,7 @@ use super::{GuardContext, GuardDecision, GuardError, GuardResult};
 
 /// Configuration for WASM-based guards
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct WasmGuardConfig {
     /// Path to WASM module file

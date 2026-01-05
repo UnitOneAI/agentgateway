@@ -12,6 +12,7 @@ use crate::mcp::security::{GuardContext, GuardDecision, GuardResult};
 
 /// Configuration for Tool Shadowing Prevention
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ToolShadowingConfig {
     /// Block duplicate tool names across servers
@@ -57,6 +58,7 @@ impl NativeGuard for ToolShadowingDetector {
         _tools: &[rmcp::model::Tool],
         _context: &GuardContext,
     ) -> GuardResult {
+        tracing::info!("ToolShadowingDetector::evaluate_tools_list called");
         // TODO: Implement duplicate detection and shadowing prevention
         // For now, always allow
         Ok(GuardDecision::Allow)

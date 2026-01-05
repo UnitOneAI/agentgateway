@@ -12,6 +12,7 @@ use crate::mcp::security::{GuardContext, GuardDecision, GuardResult};
 
 /// Configuration for Server Whitelist
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ServerWhitelistConfig {
     /// List of allowed server names/IDs
@@ -53,6 +54,7 @@ impl NativeGuard for ServerWhitelistChecker {
         _tools: &[rmcp::model::Tool],
         _context: &GuardContext,
     ) -> GuardResult {
+        tracing::info!("ServerWhitelistChecker::evaluate_tools_list called");
         // TODO: Implement whitelist checking and typosquatting detection
         // For now, always allow
         Ok(GuardDecision::Allow)
