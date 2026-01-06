@@ -1,6 +1,8 @@
 # UnitOne AgentGateway - Azure Deployment Guide
 
-Complete Infrastructure-as-Code deployment for AgentGateway with OAuth support, based on MCP Scanner deployment pattern.
+Complete Infrastructure-as-Code deployment for AgentGateway with OAuth support.
+
+> **Note**: Infrastructure is now managed via **Terraform** in a separate `terraform` repository. This guide covers the deployment from the application perspective.
 
 ## Architecture
 
@@ -29,10 +31,11 @@ Complete Infrastructure-as-Code deployment for AgentGateway with OAuth support, 
 - **OAuth Authentication**: GitHub, Microsoft (Azure AD), Google
 - **Key Vault Integration**: Secure secret management with Managed Identity
 - **MCP-Native OAuth**: Built-in support for MCP Authorization spec
-- **Infrastructure as Code**: Full Bicep templates for reproducible deployments
+- **Infrastructure as Code**: Full Terraform templates for reproducible deployments
 - **Multi-Environment**: Dev, Staging, Production configurations
 - **Monitoring**: Application Insights integration
 - **Auto-Scaling**: HTTP-based scaling rules
+- **Automated CI/CD**: ACR Tasks for automatic builds on git push
 
 ## Prerequisites
 
@@ -47,83 +50,139 @@ Complete Infrastructure-as-Code deployment for AgentGateway with OAuth support, 
    - **Microsoft/Azure AD**: https://portal.azure.com → Azure AD → App registrations
    - **Google**: https://console.cloud.google.com/apis/credentials
 
-3. **Docker** (optional, for local builds):
+3. **Docker** (optional, for local testing):
    ```bash
    docker --version
    ```
 
+4. **Terraform** (for infrastructure changes):
+   - See separate `terraform` repository
+
+## Deployment Overview
+
+### Infrastructure Management (Terraform)
+
+All infrastructure is managed via **Terraform** in a separate repository:
+- Location: `terraform/modules/azure/agentgateway/`
+- Environment configs: `terraform/environments/dev/agentgateway/`
+
+**Resources managed by Terraform:**
+- Azure Container Registry (ACR)
+- Log Analytics Workspace
+- Application Insights
+- Key Vault (for OAuth secrets)
+- Container Apps Environment
+- Container App with auto-scaling
+- ACR Task (for automated builds)
+
+### Automated Deployment Flow
+
+1. **Developer pushes to `main`** (or merges PR)
+2. **ACR Task automatically triggers** (configured via Terraform)
+3. **Docker image built** using `Dockerfile.acr`
+4. **Image pushed to ACR** with tags: `latest` and `{{.Run.ID}}`
+5. **Container App auto-refreshes** (if enabled in Terraform)
+
+**No manual deployment needed!** Infrastructure handles everything.
+
 ## Quick Start
 
-### 1. Setup OAuth Secrets
+### 1. Setup OAuth Secrets (First Time Only)
 
-First, create a central Key Vault for storing OAuth secrets:
+Configure OAuth secrets in Terraform variables file:
 
 ```bash
-# Create secrets resource group
-az group create --name unitone-secrets-rg --location eastus2
+cd /path/to/terraform/repo
+cd environments/dev/agentgateway
 
-# Create central secrets Key Vault
-az keyvault create \
-  --name unitone-secrets-kv \
-  --resource-group unitone-secrets-rg \
-  --location eastus2
+# Create terraform.tfvars
+cat > terraform.tfvars <<EOF
+# OAuth Configuration
+microsoft_client_id     = "YOUR_MICROSOFT_CLIENT_ID"
+microsoft_client_secret = "YOUR_MICROSOFT_CLIENT_SECRET"
+github_client_id        = "YOUR_GITHUB_CLIENT_ID"
+github_client_secret    = "YOUR_GITHUB_CLIENT_SECRET"
+google_client_id        = "YOUR_GOOGLE_CLIENT_ID"
+google_client_secret    = "YOUR_GOOGLE_CLIENT_SECRET"
 
-# Store OAuth secrets (dev environment)
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-github-client-id --value "YOUR_GITHUB_CLIENT_ID"
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-github-client-secret --value "YOUR_GITHUB_CLIENT_SECRET"
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-microsoft-client-id --value "YOUR_MICROSOFT_CLIENT_ID"
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-microsoft-client-secret --value "YOUR_MICROSOFT_CLIENT_SECRET"
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-google-client-id --value "YOUR_GOOGLE_CLIENT_ID"
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-google-client-secret --value "YOUR_GOOGLE_CLIENT_SECRET"
+# GitHub PAT for ACR Task
+github_pat = "ghp_xxxxx..."
 
-# Get ACR password (if ACR already exists) or will be auto-generated
-az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-acr-password --value "$(az acr credential show --name agwimages --query passwords[0].value -o tsv)"
+# Deployment settings
+enable_auto_deployment = true
+image_tag             = "latest"
+EOF
+
+# Keep secrets safe
+chmod 600 terraform.tfvars
 ```
 
-### 2. Update Parameter Files
-
-Edit `deploy/bicep/parameters-dev.json` and replace `<SUBSCRIPTION_ID>` with your Azure subscription ID:
+### 2. Deploy Infrastructure (First Time Only)
 
 ```bash
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-sed -i.bak "s|<SUBSCRIPTION_ID>|$SUBSCRIPTION_ID|g" deploy/bicep/parameters-dev.json
+cd /path/to/terraform/repo
+cd environments/dev/agentgateway
+
+# Initialize Terraform
+terraform init
+
+# Review planned changes
+terraform plan
+
+# Apply infrastructure
+terraform apply
 ```
 
-### 3. Deploy Infrastructure
+### 3. Deploy Application Code
 
+**Automated (Recommended)**:
 ```bash
-cd deploy
+# Just push to main!
+git push origin main
 
-# Deploy to dev environment (with image build)
-./deploy.sh --environment dev --build --tag latest
+# ACR Task builds and deploys automatically
+```
 
-# Or deploy without building (use existing image)
-./deploy.sh --environment dev
+**Manual (for testing)**:
+```bash
+# Build and push to ACR manually
+cd /path/to/agentgateway/repo
+az acr build --registry unitoneagwdevacr \
+  --image unitone-agentgateway:latest \
+  --image unitone-agentgateway:my-feature \
+  --file Dockerfile.acr \
+  --platform linux/amd64 \
+  .
+
+# Deploy specific tag (optional)
+az containerapp update \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --image unitoneagwdevacr.azurecr.io/unitone-agentgateway:my-feature
 ```
 
 ### 4. Access Your Deployment
 
-After deployment completes, you'll see:
+Get deployment URLs:
+```bash
+az containerapp show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "properties.configuration.ingress.fqdn" \
+  -o tsv
+```
 
+Output:
 ```
-===================================
-Deployment Complete!
-===================================
-UI URL: https://unitone-agw-dev-app.....azurecontainerapps.io/ui
-MCP Endpoint: https://unitone-agw-dev-app.....azurecontainerapps.io/mcp
-===================================
+https://unitone-agw-dev-app.....azurecontainerapps.io
 ```
+
+Access points:
+- **UI**: `https://<fqdn>/ui`
+- **MCP Endpoint**: `https://<fqdn>/mcp`
+- **OAuth Metadata**: `https://<fqdn>/.well-known/oauth-protected-resource/mcp/<provider>`
 
 ## OAuth Configuration
-
-### MCP Scanner Pattern
-
-AgentGateway follows the same OAuth pattern as MCP Scanner:
-
-1. **Secrets in Key Vault**: OAuth credentials stored securely
-2. **Managed Identity**: Container App uses system-assigned identity to access Key Vault
-3. **Environment Variables**: Secrets injected as environment variables
-4. **MCP-Native Auth**: Uses `mcpAuthentication` policy for MCP endpoints
 
 ### Supported OAuth Providers
 
@@ -137,6 +196,11 @@ AgentGateway follows the same OAuth pattern as MCP Scanner:
 
 **Required Scopes**: `read:all`, `write:all`
 
+**Setup**:
+1. Create OAuth App at https://github.com/settings/applications/new
+2. Set Authorization callback URL: `https://<your-fqdn>/oauth/callback`
+3. Add Client ID and Secret to Terraform variables
+
 #### 2. Microsoft Azure AD
 
 **Use Case**: Enterprise SSO, Microsoft 365 integration
@@ -147,6 +211,11 @@ AgentGateway follows the same OAuth pattern as MCP Scanner:
 
 **Required Scopes**: `api://unitone-agentgateway/read`, `api://unitone-agentgateway/write`
 
+**Setup**:
+1. Register app in Azure AD
+2. Configure API permissions
+3. Add Client ID and Secret to Terraform variables
+
 #### 3. Google OAuth
 
 **Use Case**: Google Workspace, Gmail integration
@@ -156,6 +225,11 @@ AgentGateway follows the same OAuth pattern as MCP Scanner:
 - Metadata: `/.well-known/oauth-protected-resource/mcp/google`
 
 **Required Scopes**: `openid`, `profile`, `email`
+
+**Setup**:
+1. Create OAuth 2.0 Client in Google Cloud Console
+2. Add authorized redirect URI
+3. Add Client ID and Secret to Terraform variables
 
 ### Testing OAuth Endpoints
 
@@ -172,59 +246,65 @@ curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
      https://your-app.azurecontainerapps.io/mcp/github
 ```
 
-## Deployment Commands
+## Monitoring and Operations
 
-### Build and Deploy
-
-```bash
-# Build new image and deploy to dev
-./deploy.sh --environment dev --build --tag v1.2.3
-
-# Deploy to staging with existing image
-./deploy.sh --environment staging --tag v1.2.3
-
-# Deploy to production (uses 'stable' tag by default)
-./deploy.sh --environment prod --build --tag stable
-```
-
-### Update Configuration Only
-
-If you only changed the config file (no code changes):
-
-```bash
-# Update the config in Docker image
-az acr build \
-  --registry unitoneagwdevacr \
-  --image unitone-agentgateway:latest \
-  --file Dockerfile.acr \
-  --platform linux/amd64 \
-  .
-
-# Trigger Container App revision update
-az containerapp revision copy \
-  --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg
-```
-
-### View Logs
+### View Container Logs
 
 ```bash
 # Follow logs in real-time
 az containerapp logs show \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
+  --resource-group mcp-gateway-dev-rg \
   --follow
 
 # View last 100 lines
 az containerapp logs show \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
+  --resource-group mcp-gateway-dev-rg \
   --tail 100
 ```
 
+### Check Build Status
+
+```bash
+# List recent ACR builds
+az acr task list-runs --registry unitoneagwdevacr -o table
+
+# View specific build logs
+az acr task logs --registry unitoneagwdevacr --run-id <run-id>
+
+# Follow live build
+az acr task logs --registry unitoneagwdevacr --name agentgateway-build-task --follow
+```
+
+### Check Deployment Status
+
+```bash
+# List revisions
+az containerapp revision list \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "[].{Name:name, Active:properties.active, Created:properties.createdTime, Image:properties.template.containers[0].image}" \
+  -o table
+
+# Check current image
+az containerapp show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "properties.template.containers[0].image" \
+  -o tsv
+```
+
+### Application Insights
+
+View metrics in Azure Portal:
+1. Navigate to Application Insights resource
+2. Check performance, failures, dependencies
+3. Query logs with Kusto Query Language (KQL)
+
 ## Infrastructure Components
 
-### Created Resources
+### Created Resources (via Terraform)
 
 | Resource | Purpose | Environment |
 |----------|---------|-------------|
@@ -234,6 +314,7 @@ az containerapp logs show \
 | **Container App** | Runs AgentGateway | `unitone-agw-{env}-app` |
 | **Log Analytics** | Centralized logging | `unitone-agw-{env}-logs` |
 | **App Insights** | Application monitoring | `unitone-agw-{env}-insights` |
+| **ACR Task** | Automated builds | `agentgateway-build-task` |
 
 ### Scaling Configuration
 
@@ -242,6 +323,87 @@ az containerapp logs show \
 - **Prod**: 2-10 replicas
 
 Auto-scaling based on HTTP concurrent requests (100 per replica).
+
+## Troubleshooting
+
+### Build Not Triggering
+
+```bash
+# Check ACR Task exists
+az acr task show --registry unitoneagwdevacr --name agentgateway-build-task
+
+# If missing, run terraform apply
+cd /path/to/terraform/repo/environments/dev/agentgateway
+terraform apply
+```
+
+### Container App Not Starting
+
+```bash
+# Check replica status
+az containerapp replica list \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --output table
+
+# View container logs
+az containerapp logs show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --tail 50
+```
+
+### OAuth Secrets Not Found
+
+```bash
+# Check secrets in Key Vault
+az keyvault secret list --vault-name unitone-agw-dev-kv --query "[].name" -o table
+
+# Verify Container App can access Key Vault
+az containerapp show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "identity.principalId"
+
+# Check access policy
+az keyvault show \
+  --name unitone-agw-dev-kv \
+  --query "properties.accessPolicies[?objectId=='<PRINCIPAL_ID>']"
+```
+
+### OAuth Flow Not Working
+
+1. **Check redirect URIs** match your deployment URL
+2. **Verify secrets** are correctly configured in Terraform
+3. **Check CORS settings** - configured in Terraform
+4. **Test token validation** with your OAuth provider's introspection endpoint
+5. **Review logs** for authentication errors
+
+## Security Best Practices
+
+1. **Rotate Secrets Regularly**:
+   ```bash
+   # Update in Terraform
+   cd /path/to/terraform/repo/environments/dev/agentgateway
+
+   # Edit terraform.tfvars with new secrets
+   vim terraform.tfvars
+
+   # Apply changes
+   terraform apply
+
+   # Container App will automatically restart with new secrets
+   ```
+
+2. **Use Managed Identities**: Already configured in Terraform
+
+3. **Enable HTTPS Only**: Configured in ingress settings
+
+4. **Restrict CORS Origins**: Update in Terraform configuration for production
+
+5. **Monitor Access**: Use Application Insights to track OAuth failures
+
+6. **Secure terraform.tfvars**: Never commit to git, use `.gitignore`
 
 ## Cost Estimate
 
@@ -253,95 +415,61 @@ Auto-scaling based on HTTP concurrent requests (100 per replica).
 
 Costs include: Container Apps, ACR, Key Vault, Log Analytics, Application Insights.
 
-## Troubleshooting
+## Environment Details
 
-### OAuth Secrets Not Found
+### Dev Environment
+- **Resource Group**: `mcp-gateway-dev-rg`
+- **ACR**: `unitoneagwdevacr`
+- **Container App**: `unitone-agw-dev-app`
+- **Auto-deploy**: Enabled on push to `main`
+- **Scaling**: 1-3 replicas
 
-```bash
-# Verify secrets exist in Key Vault
-az keyvault secret list --vault-name unitone-secrets-kv --query "[].name" -o table
+### Production Environment
+- **Resource Group**: `mcp-gateway-prod-rg` (if configured)
+- **ACR**: `unitoneagwprodacr`
+- **Container App**: `unitone-agw-prod-app`
+- **Auto-deploy**: Manual/controlled via Terraform
+- **Scaling**: 2-10 replicas
 
-# Check Container App can access Key Vault
-az containerapp show \
-  --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --query "identity.principalId"
+## Development Workflow
 
-# Verify Key Vault access policy
-az keyvault show \
-  --name unitone-agw-dev-kv \
-  --query "properties.accessPolicies[?objectId=='<PRINCIPAL_ID>']"
-```
+1. Make code changes in feature branch
+2. Create PR to `main`
+3. PR triggers CI tests (GitHub Actions)
+4. After approval, merge to `main`
+5. ACR Task automatically builds new image
+6. Container App auto-deploys (if enabled)
+7. Verify deployment
 
-### Container App Unhealthy
+## Reference Documentation
 
-```bash
-# Check replica status
-az containerapp replica list \
-  --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --output table
-
-# View container logs
-az containerapp logs show \
-  --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --tail 50
-```
-
-### OAuth Flow Not Working
-
-1. **Check redirect URIs** match your deployment URL
-2. **Verify JWKS URL** is accessible: `curl https://token.actions.githubusercontent.com/.well-known/jwks`
-3. **Test token validation** with your OAuth provider's token introspection endpoint
-4. **Check CORS settings** in Bicep template
-
-## Security Best Practices
-
-1. **Rotate Secrets Regularly**:
-   ```bash
-   az keyvault secret set --vault-name unitone-secrets-kv --name agw-dev-github-client-secret --value "NEW_SECRET"
-   # Restart Container App to pick up new secret
-   az containerapp revision copy --name unitone-agw-dev-app --resource-group unitone-agw-dev-rg
-   ```
-
-2. **Use Managed Identities**: Already configured in Bicep template
-
-3. **Enable HTTPS Only**: Configured in ingress settings
-
-4. **Restrict CORS Origins**: Update `corsPolicy` in `main.bicep` for production
-
-5. **Monitor Access**: Use Application Insights to track OAuth failures
-
-## Comparison with MCP Scanner
-
-| Feature | MCP Scanner | AgentGateway |
-|---------|-------------|--------------|
-| **Architecture** | Frontend + API + Worker | Single service |
-| **Database** | PostgreSQL + Redis | Stateless (no DB) |
-| **OAuth** | GitHub, Microsoft, Google | **Same** + Any OIDC provider |
-| **OAuth Pattern** | Session-based (cookies) | Token-based (Bearer) |
-| **Deployment** | 3 Container Apps | 1 Container App |
-| **Cost** | ~$100-400/month | **~$15-300/month** |
-| **Use Case** | Security scanning | **MCP Gateway/Proxy** |
+- **Terraform Configuration**: See `terraform` repository
+  - Module: `modules/azure/agentgateway/`
+  - CI/CD: `modules/azure/agentgateway/ci_cd.tf`
+  - Environment: `environments/dev/agentgateway/`
+- **Deployment Guide**: See `deploy/DEPLOYMENT.md` in this repository
+- **ACR Tasks**: https://docs.microsoft.com/azure/container-registry/container-registry-tasks-overview
+- **Container Apps**: https://docs.microsoft.com/azure/container-apps/
+- **Terraform Azure Provider**: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
 
 ## Next Steps
 
-1. **Add Your Own MCP Servers**: Edit `deploy/configs/oauth-config.yaml`
-2. **Configure Custom Domain**: Update `customDomain` in parameters
-3. **Set up CI/CD**: Use GitHub Actions or Azure DevOps
-4. **Add More OAuth Providers**: Auth0, Okta, Keycloak support included
+1. **Configure OAuth Providers**: Set up redirect URIs in each provider
+2. **Customize Configuration**: Edit `azure-config.yaml` for your MCP servers
+3. **Set up Monitoring**: Configure alerts in Application Insights
+4. **Add More Environments**: Create staging/prod environments in Terraform
 5. **Enable Rate Limiting**: Add rate limit policies in config
+6. **Custom Domain**: Configure custom domain in Terraform
 
 ## Support
 
 For issues or questions:
 - Check [AgentGateway Documentation](https://github.com/agentgateway/agentgateway)
 - Review [MCP Authentication Spec](https://spec.modelcontextprotocol.io/specification/2025-11-05/authentication/)
+- Check deployment docs in `deploy/DEPLOYMENT.md`
 - Open an issue on GitHub
 
 ---
 
 **Created by**: UnitOne DevOps Team
-**Based on**: MCP Scanner deployment pattern
-**Last Updated**: December 2025
+**Last Updated**: January 2026

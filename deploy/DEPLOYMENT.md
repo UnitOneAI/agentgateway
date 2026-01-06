@@ -1,78 +1,24 @@
-# Deployment Automation Guide
+# Deployment Guide
 
-This document explains the deployment automation for UnitOne AgentGateway.
+This document explains the deployment process for UnitOne AgentGateway.
 
 ## Overview
 
-The deployment process is fully automated using:
-- **Bicep** for infrastructure-as-code
-- **GitHub Actions** for CI/CD
+The deployment is fully automated using:
+- **Terraform** for infrastructure-as-code (managed in separate `terraform` repository)
 - **Azure Container Registry (ACR)** for Docker image storage
+- **ACR Tasks** for automated builds on git push
 - **Azure Container Apps** for hosting
 
-## Deployment Workflows
+## Deployment Architecture
 
-### 1. CI/CD Pipeline (`.github/workflows/pull_request.yml`)
+### Infrastructure (Terraform)
 
-**Triggers**: Push to `main`, Pull Requests to `main`
+All infrastructure is managed via Terraform in the **separate `terraform` repository**:
+- Location: `terraform/modules/azure/agentgateway/`
+- Environment configs: `terraform/environments/dev/agentgateway/`
 
-**What it does**:
-- Builds on multiple platforms (Linux x86/ARM, macOS, Windows)
-- Builds UI (`npm run build`)
-- Runs all tests (`make test`)
-- Runs validation (`make validate`)
-- Runs linting
-
-**Does NOT**: Deploy to Azure
-
----
-
-### 2. Azure Deployment (`.github/workflows/azure-deploy.yml`) ⭐ NEW
-
-**Triggers**:
-- **Push to `main`**: Automatically deploys to **dev** environment
-- **Release published**: Automatically deploys to **prod** environment
-- **Manual dispatch**: Deploy to any environment with custom tag
-
-**What it does**:
-1. Determines environment and image tag based on trigger
-2. Builds Docker image using `az acr build`
-3. Multi-tags images:
-   - Main tag (commit SHA for dev, semantic version for prod)
-   - Timestamp tag (YYYYMMDD-HHMMSS)
-   - `latest` tag
-4. Deploys infrastructure using Bicep
-5. Verifies deployment health
-6. Outputs UI and MCP endpoint URLs
-
-**Image Tagging Strategy**:
-- **Dev builds** (push to main): `<short-commit-sha>`, `<timestamp>`, `latest`
-- **Prod releases** (published release): `<semantic-version>`, `<timestamp>`, `latest`
-- **Manual dispatch**: Custom tag + `<timestamp>`, `latest`
-
----
-
-### 3. Release Workflow (`.github/workflows/release.yml`)
-
-**Triggers**: Manual dispatch or release creation
-
-**What it does**:
-- Creates semantic version tags (v1.0.0, v1.0, v1)
-- Builds and pushes to GitHub Container Registry (`ghcr.io`)
-
-**Note**: This workflow is separate from Azure deployment. Azure uses ACR (`agwimages.azurecr.io`).
-
----
-
-## Infrastructure-as-Code (Bicep)
-
-### Files
-- **`deploy/bicep/main.bicep`**: Main infrastructure template
-- **`deploy/bicep/parameters-dev.json`**: Dev environment parameters
-- **`deploy/bicep/parameters-staging.json`**: Staging environment parameters (if exists)
-- **`deploy/bicep/parameters-prod.json`**: Prod environment parameters (if exists)
-
-### Resources Defined
+**Resources managed by Terraform:**
 - Azure Container Registry (ACR)
 - Log Analytics Workspace
 - Application Insights
@@ -81,285 +27,341 @@ The deployment process is fully automated using:
 - Container App with:
   - Managed identity
   - Ingress configuration
-  - CORS policy
-  - OAuth environment variables
   - Auto-scaling rules
+- ACR Task (for automated builds)
 
----
+### CI/CD Pipeline
 
-## GitHub Secrets Required
+**Automated Build & Deploy Flow:**
 
-To enable automated deployments, configure these secrets in GitHub repository settings:
+1. **Developer pushes to `main`** (or merges PR)
+2. **ACR Task automatically triggers** (configured via Terraform)
+3. **ACR builds Docker image** using `Dockerfile.acr`
+4. **Image tagged and pushed** to ACR:
+   - `unitone-agentgateway:latest`
+   - `unitone-agentgateway:{{.Run.ID}}`
+5. **Container App auto-refreshes** (if `enable_auto_deployment = true` in Terraform)
+6. **New revision deployed** automatically
 
-### `AZURE_CREDENTIALS`
-Azure Service Principal credentials in JSON format:
+**No GitHub Actions needed for Azure deployment!** The ACR Task handles everything.
 
-```json
-{
-  "clientId": "<client-id>",
-  "clientSecret": "<client-secret>",
-  "subscriptionId": "<subscription-id>",
-  "tenantId": "<tenant-id>"
-}
+### GitHub Workflows
+
+This repository contains GitHub workflows for **CI testing only**:
+
+- **`.github/workflows/pull_request.yml`**: Runs on PRs and pushes to `main`
+  - Builds on multiple platforms (Linux x86/ARM, macOS, Windows)
+  - Builds UI (`npm run build`)
+  - Runs tests (`make test`)
+  - Runs validation (`make validate`)
+  - Runs linting
+  - **Does NOT deploy to Azure**
+
+- **`.github/workflows/release.yml`**: Publishes releases
+  - Creates semantic version tags (v1.0.0)
+  - Builds and pushes to **GitHub Container Registry** (`ghcr.io`)
+  - **Does NOT deploy to Azure**
+
+- **`.github/workflows/e2e-tests.yml`**: E2E testing
+
+## Configuration
+
+### Terraform Variables
+
+Configure deployment behavior in Terraform:
+
+```hcl
+# terraform/environments/dev/agentgateway/terraform.tfvars
+enable_auto_deployment = true  # Auto-deploy on successful build
+image_tag             = "latest"
+github_pat            = "ghp_xxx..."  # Required for ACR Task
+
+# OAuth secrets
+microsoft_client_id     = "..."
+microsoft_client_secret = "..."
+github_client_id        = "..."
+github_client_secret    = "..."
+google_client_id        = "..."
+google_client_secret    = "..."
 ```
 
-**How to create**:
-```bash
-az ad sp create-for-rbac \
-  --name "github-actions-agentgateway" \
-  --role contributor \
-  --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/unitone-agw-dev-rg \
-  --sdk-auth
-```
+### ACR Task Configuration
 
-### Environment-Specific Secrets
+The ACR Task is configured in Terraform (`modules/azure/agentgateway/ci_cd.tf`):
 
-For each environment (dev, staging, prod), configure:
-- OAuth client IDs and secrets (stored in Azure Key Vault)
-- Any environment-specific configuration
+**Triggers:**
+- Git commits to `main` branch
+- Base image updates (security patches)
 
----
+**Build configuration:**
+- Repository: `https://github.com/UnitOneAI/unitone-agentgateway.git`
+- Dockerfile: `Dockerfile.acr`
+- CPU: 2 cores
 
-## Environment Configuration
+## Environments
 
 ### Dev Environment
-- **Resource Group**: `unitone-agw-dev-rg`
+- **Resource Group**: `mcp-gateway-dev-rg`
 - **ACR**: `unitoneagwdevacr`
 - **Container App**: `unitone-agw-dev-app`
-- **Auto-deploy**: On push to `main`
+- **URL**: https://unitone-agw-dev-app.azurewebsites.net
+- **Auto-deploy**: Enabled on push to `main`
 - **Scaling**: 1-3 replicas
 
-### Staging Environment (if configured)
-- **Resource Group**: `unitone-agw-staging-rg`
-- **ACR**: `unitoneagwstagingacr`
-- **Container App**: `unitone-agw-staging-app`
-- **Auto-deploy**: Manual dispatch
-- **Scaling**: 1-5 replicas
-
-### Prod Environment
-- **Resource Group**: `unitone-agw-prod-rg`
+### Production Environment
+- **Resource Group**: `mcp-gateway-prod-rg` (if configured)
 - **ACR**: `unitoneagwprodacr`
 - **Container App**: `unitone-agw-prod-app`
-- **Auto-deploy**: On release published
+- **Auto-deploy**: Typically manual/controlled
 - **Scaling**: 2-10 replicas
 
----
+## Manual Operations
 
-## Manual Deployment
+### Build and Push Image Manually
 
-If you need to deploy manually, use the deployment script:
+If you need to build without triggering via git push:
 
 ```bash
-cd deploy
+cd /Users/surindersingh/source_code/agentgateway
 
-# Deploy to dev (build + deploy)
-./deploy.sh --environment dev --build --tag latest
-
-# Deploy to staging
-./deploy.sh --environment staging --build --tag v1.0.0
-
-# Deploy to prod
-./deploy.sh --environment prod --build --tag v1.0.0
-
-# Deploy without building (use existing image)
-./deploy.sh --environment dev --tag existing-tag
+# Build and push to ACR
+az acr build --registry unitoneagwdevacr \
+  --image unitone-agentgateway:latest \
+  --image unitone-agentgateway:my-feature \
+  --file Dockerfile.acr \
+  --platform linux/amd64 \
+  .
 ```
 
-**Script Options**:
-- `-e, --environment ENV`: Environment to deploy (dev, staging, prod) [default: dev]
-- `-b, --build`: Build and push Docker image before deploying
-- `-t, --tag TAG`: Docker image tag [default: latest]
-- `-s, --subscription ID`: Azure subscription ID
-- `-h, --help`: Show help message
+### Deploy Specific Image Tag
 
----
+```bash
+# Update Container App with specific tag
+az containerapp update \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --image unitoneagwdevacr.azurecr.io/unitone-agentgateway:my-feature
+```
 
-## Deployment Process Flow
+### Deploy Infrastructure Changes
 
-### Automated Dev Deployment (Push to Main)
+```bash
+cd /path/to/terraform/repo
+cd environments/dev/agentgateway
 
-1. **Trigger**: Developer pushes code to `main` branch
-2. **CI Tests**: `pull_request.yml` runs tests, validation, linting
-3. **Build**: `azure-deploy.yml` builds Docker image with commit SHA tag
-4. **Push to ACR**: Image pushed to `unitoneagwdevacr.azurecr.io`
-5. **Deploy**: Bicep template updates Container App with new image
-6. **Verify**: Workflow checks Container App health status
-7. **Notify**: Workflow outputs deployment URLs in GitHub Actions UI
+# Review changes
+terraform plan
 
-### Automated Prod Deployment (Release Published)
+# Apply changes
+terraform apply
+```
 
-1. **Trigger**: Maintainer publishes a release (e.g., v1.2.0)
-2. **Build**: `azure-deploy.yml` builds Docker image with semantic version tag
-3. **Push to ACR**: Image pushed to `unitoneagwprodacr.azurecr.io`
-4. **Deploy**: Bicep template updates Container App with new image
-5. **Verify**: Workflow checks Container App health status
-6. **Notify**: Workflow outputs deployment URLs
+## Monitoring Deployments
 
-### Manual Deployment (Workflow Dispatch)
+### Check ACR Build Status
 
-1. **Trigger**: Navigate to Actions → Azure Deployment → Run workflow
-2. **Select**: Choose environment (dev/staging/prod) and optional custom tag
-3. **Build**: Builds Docker image with specified or commit SHA tag
-4. **Deploy**: Same as above
-5. **Verify**: Same as above
+```bash
+# List recent builds
+az acr task list-runs --registry unitoneagwdevacr -o table
 
----
+# View build logs
+az acr task logs --registry unitoneagwdevacr --run-id <run-id>
+```
 
-## Image Tag History
+### Check Container App Status
 
-All image tags created during this development session:
+```bash
+# List revisions
+az containerapp revision list \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "[].{Name:name, Active:properties.active, Created:properties.createdTime, TrafficWeight:properties.trafficWeight}" \
+  -o table
 
-### Development Tags (Manual)
-- `security-guards-tests-pass` - Security guards implementation with all tests passing
-- `config-fixed` - Configuration fixes
-- `oauth-v1`, `oauth-v2-fixed` - OAuth integration fixes
-- `user-menu` - User menu feature
-- `ui-enabled`, `admin-api-fix` - UI and admin API fixes
-- `verify-config`, `working`, `fixed-final` - Various development iterations
+# View logs
+az containerapp logs show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --follow
 
-**Note**: Going forward, these manual tags will be replaced by automated tags based on commit SHA (dev) and semantic versioning (prod).
+# Get app URL
+az containerapp show \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --query "properties.configuration.ingress.fqdn" \
+  -o tsv
+```
 
-### Automated Tags (Future)
-- **Dev**: `<commit-sha>` (e.g., `a1b2c3d`), `YYYYMMDD-HHMMSS`, `latest`
-- **Prod**: `<version>` (e.g., `1.2.0`), `YYYYMMDD-HHMMSS`, `latest`
+### Azure Portal
 
----
+- **Container App**: Monitor revisions, logs, metrics
+- **Application Insights**: View telemetry, errors, performance
+- **Log Analytics**: Query logs across all components
+- **ACR**: View build history, task runs, images
 
-## Rollback Procedure
-
-### Using Azure Portal
-1. Navigate to Container App → Revisions
-2. Select previous healthy revision
-3. Click "Activate" and set traffic to 100%
+## Rollback Procedures
 
 ### Using Azure CLI
+
 ```bash
 # List all revisions
 az containerapp revision list \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
+  --resource-group mcp-gateway-dev-rg \
   --query "[].{Name:name, Active:properties.active, Created:properties.createdTime, Image:properties.template.containers[0].image}" \
   -o table
 
-# Activate specific revision
+# Activate previous revision
 az containerapp revision activate \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --revision <revision-name>
+  --resource-group mcp-gateway-dev-rg \
+  --revision <previous-revision-name>
 
-# Deactivate current revision
+# Deactivate bad revision
 az containerapp revision deactivate \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
+  --resource-group mcp-gateway-dev-rg \
   --revision <bad-revision-name>
 ```
 
-### Using GitHub Actions (Manual Dispatch)
-1. Go to Actions → Azure Deployment → Run workflow
-2. Select the environment
-3. Enter the previous working tag (check ACR for available tags)
-4. Run workflow
+### Using Azure Portal
 
----
+1. Navigate to Container App → Revisions
+2. Select previous healthy revision
+3. Click "Activate" and set traffic to 100%
 
-## Monitoring Deployments
+### Rebuild Previous Version
 
-### GitHub Actions
-- View workflow runs at: https://github.com/<org>/<repo>/actions
-- Each run shows:
-  - Build logs
-  - Deployment logs
-  - Health check results
-  - Deployment URLs
-
-### Azure Portal
-- **Container App**: Monitor revisions, logs, metrics
-- **Application Insights**: View telemetry, errors, performance
-- **Log Analytics**: Query logs across all components
-
-### Azure CLI
 ```bash
-# Follow logs
+# Deploy with specific image tag from ACR
+az containerapp update \
+  --name unitone-agw-dev-app \
+  --resource-group mcp-gateway-dev-rg \
+  --image unitoneagwdevacr.azurecr.io/unitone-agentgateway:<previous-tag>
+```
+
+## Troubleshooting
+
+### Build Fails
+
+Check ACR Task logs:
+```bash
+az acr task logs --registry unitoneagwdevacr --name agentgateway-build-task
+```
+
+Common issues:
+- GitHub PAT expired or invalid
+- Dockerfile.acr syntax errors
+- Build dependencies missing
+
+### Container App Not Starting
+
+```bash
+# Check logs
 az containerapp logs show \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --follow
+  --resource-group mcp-gateway-dev-rg \
+  --tail 100
 
-# Get Container App URL
+# Check current status
 az containerapp show \
   --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
-  --query "properties.configuration.ingress.fqdn" \
-  -o tsv
-
-# Check health status
-az containerapp show \
-  --name unitone-agw-dev-app \
-  --resource-group unitone-agw-dev-rg \
+  --resource-group mcp-gateway-dev-rg \
   --query "{ProvisioningState:properties.provisioningState, RunningState:properties.runningStatus}" \
   -o table
 ```
 
----
-
-## Troubleshooting
-
-### Deployment Fails with "Not Authorized"
-- Check `AZURE_CREDENTIALS` secret is properly configured
-- Verify Service Principal has Contributor role on resource group
-- Ensure subscription ID is correct
-
-### Image Build Fails
-- Check Dockerfile.acr exists and is valid
-- Verify ACR exists and has sufficient permissions
-- Check build logs in GitHub Actions workflow run
-
-### Container App Not Starting
-- Check container logs: `az containerapp logs show`
-- Verify environment variables are set correctly
-- Check if OAuth secrets are properly configured in Key Vault
-- Verify image was successfully pushed to ACR
-
-### UI Returns 404
-- Verify UI was built during Docker image creation
-- Check Dockerfile.acr includes UI build steps
-- Ensure ingress is configured correctly in Bicep
+Common issues:
+- Image tag doesn't exist in ACR
+- Environment variables missing
+- OAuth secrets not configured
+- Port 8080 not exposed
 
 ### OAuth Not Working
-- Verify OAuth client IDs and secrets in Key Vault
-- Check redirect URIs are configured in OAuth provider
-- Verify environment variables are passed to container
 
----
+Verify secrets in Key Vault:
+```bash
+az keyvault secret list --vault-name unitone-agw-dev-kv -o table
+az keyvault secret show --vault-name unitone-agw-dev-kv --name github-client-id
+```
+
+Check redirect URIs are configured in OAuth providers (GitHub, Microsoft, Google).
+
+### UI Returns 404
+
+- Verify UI was built during Docker image creation
+- Check Dockerfile.acr includes UI build steps
+- Ensure static files are served correctly
 
 ## Security Best Practices
 
 1. **Secrets Management**:
    - Never commit secrets to Git
    - Use Azure Key Vault for OAuth secrets
-   - Use GitHub Secrets for Azure credentials
+   - Use Terraform `sensitive = true` for secret variables
+   - Rotate GitHub PAT regularly
 
 2. **Image Security**:
-   - Scan images for vulnerabilities before deployment
+   - Scan images for vulnerabilities
+   - Keep base images updated (ACR Task auto-rebuilds)
    - Use minimal base images
-   - Keep dependencies up to date
+   - Review dependencies regularly
 
 3. **Access Control**:
    - Use Managed Identity for Azure resource access
-   - Restrict ACR access with role-based access control
-   - Limit Service Principal permissions to specific resource groups
+   - Restrict ACR access with RBAC
+   - Limit service principal permissions
+   - Enable OAuth for UI access
 
 4. **Network Security**:
    - Use HTTPS for all endpoints
    - Configure CORS policies appropriately
-   - Enable OAuth authentication for UI
+   - Consider private endpoints for production
 
----
+## Development Workflow
+
+### Making Code Changes
+
+1. Create feature branch: `git checkout -b feature/my-change`
+2. Make changes and test locally
+3. Commit and push: `git push origin feature/my-change`
+4. Create PR to `main`
+5. PR triggers CI tests (`.github/workflows/pull_request.yml`)
+6. After approval and merge to `main`:
+   - ACR Task automatically builds new image
+   - Container App auto-deploys (if enabled)
+7. Verify deployment in Azure
+
+### Testing Before Deployment
+
+```bash
+# Build locally
+make docker
+
+# Run locally
+docker run -p 8080:8080 agentgateway:latest
+
+# Run tests
+make test
+make validate
+```
+
+## Reference Documentation
+
+- **Terraform Configuration**: See `terraform` repository
+  - Module: `modules/azure/agentgateway/`
+  - CI/CD: `modules/azure/agentgateway/ci_cd.tf`
+  - Environment: `environments/dev/agentgateway/`
+- **ACR Tasks**: https://docs.microsoft.com/azure/container-registry/container-registry-tasks-overview
+- **Container Apps**: https://docs.microsoft.com/azure/container-apps/
+- **Terraform Azure Provider**: https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
 
 ## Next Steps
 
-1. **Set up GitHub Secrets**: Configure `AZURE_CREDENTIALS` secret
-2. **Test Workflow**: Make a small change and push to `main` to trigger dev deployment
-3. **Monitor**: Watch the GitHub Actions workflow run and verify deployment
-4. **Create Release**: When ready, create a release to deploy to production
-5. **Document**: Update this file with any environment-specific configuration
+For new deployments:
+1. Set up Terraform configuration (see `terraform` repository)
+2. Configure GitHub PAT for ACR Task
+3. Set OAuth secrets in terraform.tfvars
+4. Run `terraform apply`
+5. Push code to `main` to trigger first build
+6. Monitor deployment in Azure Portal

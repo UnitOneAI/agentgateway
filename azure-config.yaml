@@ -56,6 +56,29 @@ binds:
           pathPrefix: /mcp
       backends:
       - mcp:
+          # MCP Security Guards Configuration
+          security_guards:
+            # Tool Poisoning Detection Guard
+            - id: tool-poisoning-guard
+              enabled: true
+              priority: 100
+              failure_mode: fail_closed
+              timeout_ms: 50
+              runs_on:
+                - response
+              type: tool_poisoning
+              strict_mode: true
+              custom_patterns:
+                - "(?i)ADMIN:\\s*override"
+                - "(?i)execute\\s+as\\s+root"
+                - "(?i)\\[HIDDEN\\]"
+                - "(?i)delete\\s+all\\s+files"
+              scan_fields:
+                - name
+                - description
+                - input_schema
+              alert_threshold: 1
+
           # PII MCP Test Server (Internal URL - same Container Apps Environment)
           targets:
           - name: pii-test-server-target
