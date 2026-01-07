@@ -225,6 +225,7 @@ mod tests {
             description: description.map(|s| Cow::Owned(s.to_string())),
             icons: None,
             title: None,
+            meta: None,
             input_schema: Arc::new(
                 serde_json::from_value(serde_json::json!({"type": "object"}))
                     .unwrap()
