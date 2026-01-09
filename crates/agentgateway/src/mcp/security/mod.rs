@@ -16,7 +16,7 @@ pub mod native;
 pub mod wasm;
 
 // Re-export core types
-pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, ServerWhitelistChecker};
+pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, ServerWhitelistChecker, PiiGuard};
 
 /// Security guard that can be applied to MCP protocol operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +82,9 @@ pub enum McpGuardKind {
 
     /// Server Whitelist Enforcement (native)
     ServerWhitelist(native::ServerWhitelistConfig),
+
+    /// PII Detection and Masking (native)
+    Pii(native::PiiGuardConfig),
 
     /// Custom WASM module
     #[cfg(feature = "wasm-guards")]
@@ -203,12 +206,111 @@ pub enum GuardError {
     WasmError(String),
 }
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+/// Registry for shared GuardExecutor instances, keyed by backend name.
+/// This enables hot-reload of security guards across existing SSE sessions.
+#[derive(Clone, Default)]
+pub struct GuardExecutorRegistry {
+	executors: Arc<RwLock<HashMap<String, Arc<GuardExecutor>>>>,
+}
+
+impl std::fmt::Debug for GuardExecutorRegistry {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let executors = self.executors.read().expect("registry lock poisoned");
+		f.debug_struct("GuardExecutorRegistry")
+			.field("backend_count", &executors.len())
+			.field("backends", &executors.keys().collect::<Vec<_>>())
+			.finish()
+	}
+}
+
+impl GuardExecutorRegistry {
+	/// Create a new empty registry
+	pub fn new() -> Self {
+		Self {
+			executors: Arc::new(RwLock::new(HashMap::new())),
+		}
+	}
+
+	/// Get or create a GuardExecutor for a backend.
+	/// If the executor already exists, returns the existing one.
+	/// If not, creates a new one from the provided config.
+	pub fn get_or_create(
+		&self,
+		backend_name: &str,
+		configs: Vec<McpSecurityGuard>,
+	) -> Result<Arc<GuardExecutor>, GuardError> {
+		// First try read lock to check if exists
+		{
+			let executors = self.executors.read().expect("registry lock poisoned");
+			if let Some(executor) = executors.get(backend_name) {
+				return Ok(executor.clone());
+			}
+		}
+
+		// Need to create - acquire write lock
+		let mut executors = self.executors.write().expect("registry lock poisoned");
+
+		// Double-check in case another thread created it
+		if let Some(executor) = executors.get(backend_name) {
+			return Ok(executor.clone());
+		}
+
+		// Create new executor
+		let executor = Arc::new(GuardExecutor::new(configs)?);
+		executors.insert(backend_name.to_string(), executor.clone());
+		tracing::info!(backend = %backend_name, "Created new GuardExecutor in registry");
+		Ok(executor)
+	}
+
+	/// Update guards for a specific backend.
+	/// If the executor exists, updates it in place (affecting all existing sessions).
+	/// If not, creates a new one.
+	pub fn update_backend(
+		&self,
+		backend_name: &str,
+		configs: Vec<McpSecurityGuard>,
+	) -> Result<(), GuardError> {
+		let executors = self.executors.read().expect("registry lock poisoned");
+
+		if let Some(executor) = executors.get(backend_name) {
+			// Update existing executor - this propagates to all sessions using it
+			executor.update(configs)?;
+			tracing::info!(backend = %backend_name, "Updated GuardExecutor via hot-reload");
+		} else {
+			// No existing executor - create one on next request
+			drop(executors);
+			let mut executors = self.executors.write().expect("registry lock poisoned");
+			let executor = Arc::new(GuardExecutor::new(configs)?);
+			executors.insert(backend_name.to_string(), executor);
+			tracing::info!(backend = %backend_name, "Created new GuardExecutor during hot-reload");
+		}
+		Ok(())
+	}
+
+	/// Remove a backend's executor from the registry.
+	/// Called when a backend is removed from config.
+	pub fn remove_backend(&self, backend_name: &str) {
+		let mut executors = self.executors.write().expect("registry lock poisoned");
+		if executors.remove(backend_name).is_some() {
+			tracing::info!(backend = %backend_name, "Removed GuardExecutor from registry");
+		}
+	}
+
+	/// Get a list of all backend names with registered executors
+	pub fn backend_names(&self) -> Vec<String> {
+		let executors = self.executors.read().expect("registry lock poisoned");
+		executors.keys().cloned().collect()
+	}
+}
 
 /// Guard executor that manages and executes security guards in priority order
 #[derive(Clone)]
 pub struct GuardExecutor {
-	guards: Arc<Vec<InitializedGuard>>,
+	/// Guards are stored behind RwLock to support hot-reload of config
+	guards: Arc<RwLock<Vec<InitializedGuard>>>,
 }
 
 struct InitializedGuard {
@@ -216,57 +318,88 @@ struct InitializedGuard {
 	guard: Arc<dyn native::NativeGuard>,
 }
 
+/// Initialize guards from config (shared logic for new() and update())
+fn initialize_guards(configs: Vec<McpSecurityGuard>) -> Result<Vec<InitializedGuard>, GuardError> {
+	tracing::info!(
+		config_count = configs.len(),
+		"Initializing guards from config"
+	);
+	let mut guards = Vec::new();
+
+	for config in configs {
+		tracing::info!(
+			guard_id = %config.id,
+			guard_type = ?std::mem::discriminant(&config.kind),
+			enabled = config.enabled,
+			runs_on = ?config.runs_on,
+			"Processing guard config"
+		);
+		if !config.enabled {
+			tracing::info!(guard_id = %config.id, "Guard disabled, skipping");
+			continue;
+		}
+
+		let guard: Arc<dyn native::NativeGuard> = match &config.kind {
+			McpGuardKind::ToolPoisoning(cfg) => {
+				Arc::new(native::ToolPoisoningDetector::new(cfg.clone())?)
+			},
+			McpGuardKind::RugPull(cfg) => {
+				Arc::new(native::RugPullDetector::new(cfg.clone()))
+			},
+			McpGuardKind::ToolShadowing(cfg) => {
+				Arc::new(native::ToolShadowingDetector::new(cfg.clone()))
+			},
+			McpGuardKind::ServerWhitelist(cfg) => {
+				Arc::new(native::ServerWhitelistChecker::new(cfg.clone()))
+			},
+			McpGuardKind::Pii(cfg) => {
+				Arc::new(native::PiiGuard::new(cfg.clone()))
+			},
+			#[cfg(feature = "wasm-guards")]
+			McpGuardKind::Wasm(_cfg) => {
+				// WASM guards need special handling
+				return Err(GuardError::ConfigError(
+					"WASM guards not yet fully implemented".to_string()
+				));
+			},
+		};
+
+		guards.push(InitializedGuard {
+			config: config.clone(),
+			guard,
+		});
+	}
+
+	// Sort by priority (lower = higher priority)
+	guards.sort_by_key(|g| g.config.priority);
+
+	Ok(guards)
+}
+
 impl GuardExecutor {
 	/// Create a new GuardExecutor from a list of guard configurations
 	pub fn new(configs: Vec<McpSecurityGuard>) -> Result<Self, GuardError> {
-		let mut guards = Vec::new();
-
-		for config in configs {
-			if !config.enabled {
-				continue;
-			}
-
-			let guard: Arc<dyn native::NativeGuard> = match &config.kind {
-				McpGuardKind::ToolPoisoning(cfg) => {
-					Arc::new(native::ToolPoisoningDetector::new(cfg.clone())?)
-				},
-				McpGuardKind::RugPull(cfg) => {
-					Arc::new(native::RugPullDetector::new(cfg.clone()))
-				},
-				McpGuardKind::ToolShadowing(cfg) => {
-					Arc::new(native::ToolShadowingDetector::new(cfg.clone()))
-				},
-				McpGuardKind::ServerWhitelist(cfg) => {
-					Arc::new(native::ServerWhitelistChecker::new(cfg.clone()))
-				},
-				#[cfg(feature = "wasm-guards")]
-				McpGuardKind::Wasm(_cfg) => {
-					// WASM guards need special handling
-					return Err(GuardError::ConfigError(
-						"WASM guards not yet fully implemented".to_string()
-					));
-				},
-			};
-
-			guards.push(InitializedGuard {
-				config: config.clone(),
-				guard,
-			});
-		}
-
-		// Sort by priority (lower = higher priority)
-		guards.sort_by_key(|g| g.config.priority);
-
+		let guards = initialize_guards(configs)?;
 		Ok(Self {
-			guards: Arc::new(guards),
+			guards: Arc::new(RwLock::new(guards)),
 		})
 	}
 
 	/// Create an empty executor with no guards
 	pub fn empty() -> Self {
 		Self {
-			guards: Arc::new(Vec::new()),
+			guards: Arc::new(RwLock::new(Vec::new())),
 		}
+	}
+
+	/// Update guards with new configuration (hot-reload support)
+	/// This replaces all guards atomically
+	pub fn update(&self, configs: Vec<McpSecurityGuard>) -> Result<(), GuardError> {
+		let new_guards = initialize_guards(configs)?;
+		let mut guards = self.guards.write().expect("guards lock poisoned");
+		*guards = new_guards;
+		tracing::info!("Security guards updated via hot-reload");
+		Ok(())
 	}
 
 	/// Execute guards on a tools/list response
@@ -275,13 +408,14 @@ impl GuardExecutor {
 		tools: &[rmcp::model::Tool],
 		context: &GuardContext,
 	) -> GuardResult {
+		let guards = self.guards.read().expect("guards lock poisoned");
 		tracing::info!(
-			guard_count = self.guards.len(),
+			guard_count = guards.len(),
 			tool_count = tools.len(),
 			server = %context.server_name,
 			"GuardExecutor::evaluate_tools_list called"
 		);
-		for guard_entry in self.guards.iter() {
+		for guard_entry in guards.iter() {
 			// Only run guards configured for ToolsList or Response phase
 			if !guard_entry.config.runs_on.contains(&GuardPhase::ToolsList)
 				&& !guard_entry.config.runs_on.contains(&GuardPhase::Response)
@@ -292,6 +426,119 @@ impl GuardExecutor {
 			// Execute guard with timeout
 			let result = self.execute_with_timeout(
 				|| guard_entry.guard.evaluate_tools_list(tools, context),
+				Duration::from_millis(guard_entry.config.timeout_ms),
+				&guard_entry.config,
+			);
+
+			// Handle result based on failure mode
+			match result {
+				Ok(GuardDecision::Allow) => continue,
+				Ok(decision) => return Ok(decision),
+				Err(e) => {
+					match guard_entry.config.failure_mode {
+						FailureMode::FailClosed => {
+							return Err(GuardError::ExecutionError(format!(
+								"Guard {} failed: {}",
+								guard_entry.config.id,
+								e
+							)));
+						},
+						FailureMode::FailOpen => {
+							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
+								guard_entry.config.id, e);
+							continue;
+						},
+					}
+				},
+			}
+		}
+
+		Ok(GuardDecision::Allow)
+	}
+
+	/// Execute guards on a tool invocation (tools/call)
+	pub fn evaluate_tool_invoke(
+		&self,
+		tool_name: &str,
+		arguments: &serde_json::Value,
+		context: &GuardContext,
+	) -> GuardResult {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		tracing::info!(
+			guard_count = guards.len(),
+			tool = %tool_name,
+			server = %context.server_name,
+			arguments = %arguments,
+			"GuardExecutor::evaluate_tool_invoke called"
+		);
+		for guard_entry in guards.iter() {
+			tracing::info!(
+				guard_id = %guard_entry.config.id,
+				runs_on = ?guard_entry.config.runs_on,
+				"Checking guard for tool_invoke"
+			);
+			// Only run guards configured for ToolInvoke or Request phase
+			if !guard_entry.config.runs_on.contains(&GuardPhase::ToolInvoke)
+				&& !guard_entry.config.runs_on.contains(&GuardPhase::Request)
+			{
+				tracing::info!(guard_id = %guard_entry.config.id, "Guard skipped - runs_on doesn't include tool_invoke/request");
+				continue;
+			}
+
+			// Execute guard with timeout
+			let result = self.execute_with_timeout(
+				|| guard_entry.guard.evaluate_tool_invoke(tool_name, arguments, context),
+				Duration::from_millis(guard_entry.config.timeout_ms),
+				&guard_entry.config,
+			);
+
+			// Handle result based on failure mode
+			match result {
+				Ok(GuardDecision::Allow) => continue,
+				Ok(decision) => return Ok(decision),
+				Err(e) => {
+					match guard_entry.config.failure_mode {
+						FailureMode::FailClosed => {
+							return Err(GuardError::ExecutionError(format!(
+								"Guard {} failed: {}",
+								guard_entry.config.id,
+								e
+							)));
+						},
+						FailureMode::FailOpen => {
+							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
+								guard_entry.config.id, e);
+							continue;
+						},
+					}
+				},
+			}
+		}
+
+		Ok(GuardDecision::Allow)
+	}
+
+	/// Execute guards on a response
+	pub fn evaluate_response(
+		&self,
+		response: &serde_json::Value,
+		context: &GuardContext,
+	) -> GuardResult {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		tracing::debug!(
+			guard_count = guards.len(),
+			server = %context.server_name,
+			"GuardExecutor::evaluate_response called"
+		);
+		for guard_entry in guards.iter() {
+			// Only run guards configured for Response phase
+			if !guard_entry.config.runs_on.contains(&GuardPhase::Response) {
+				continue;
+			}
+
+			// Execute guard with timeout
+			let result = self.execute_with_timeout(
+				|| guard_entry.guard.evaluate_response(response, context),
 				Duration::from_millis(guard_entry.config.timeout_ms),
 				&guard_entry.config,
 			);
@@ -361,5 +608,40 @@ custom_patterns:
         assert_eq!(guard.priority, 100);
         assert_eq!(guard.timeout_ms, 50);
         assert!(matches!(guard.kind, McpGuardKind::ToolPoisoning(_)));
+    }
+
+    #[test]
+    fn test_pii_guard_deserialization() {
+        let yaml = r#"
+id: pii-guard
+priority: 50
+runs_on:
+  - request
+  - response
+  - tool_invoke
+type: pii
+detect:
+  - email
+  - credit_card
+action: reject
+"#;
+
+        let guard: McpSecurityGuard = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(guard.id, "pii-guard");
+        assert_eq!(guard.priority, 50);
+        assert_eq!(guard.runs_on.len(), 3);
+        assert!(guard.runs_on.contains(&GuardPhase::Request));
+        assert!(guard.runs_on.contains(&GuardPhase::Response));
+        assert!(guard.runs_on.contains(&GuardPhase::ToolInvoke));
+
+        match guard.kind {
+            McpGuardKind::Pii(config) => {
+                assert_eq!(config.detect.len(), 2);
+                assert!(config.detect.contains(&native::PiiType::Email));
+                assert!(config.detect.contains(&native::PiiType::CreditCard));
+                assert_eq!(config.action, native::PiiAction::Reject);
+            },
+            _ => panic!("Expected Pii guard kind"),
+        }
     }
 }

@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use rmcp::ErrorData;
 use rmcp::model::{
 	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, ErrorCode,
-	Implementation, JsonRpcError, ProtocolVersion, RequestId, ServerJsonRpcMessage,
+	Implementation, ProtocolVersion, RequestId, ServerJsonRpcMessage,
 };
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 use sse_stream::{KeepAlive, Sse, SseBody, SseStream};
@@ -162,28 +162,48 @@ impl Session {
 				resource_name,
 			} = &e
 				&& let Some(ref req_id) = req_id
-				&& let Ok(body) = serde_json::to_string(&JsonRpcError {
-					jsonrpc: Default::default(),
-					id: req_id.clone(),
-					error: ErrorData {
+			{
+				// Use ServerJsonRpcMessage::error for proper SSE compatibility
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
 						code: ErrorCode::INVALID_PARAMS,
 						message: format!("Unknown {resource_type}: {resource_name}").into(),
 						data: None,
 					},
-				}) {
-				return http_json_error(StatusCode::OK, body);
+					req_id.clone(),
+				);
+				if let Ok(body) = serde_json::to_string(&error_msg) {
+					return http_json_error(StatusCode::OK, body);
+				}
+			}
+			// Handle security guard errors - return JSON-RPC error
+			// Use application/json format which MCP SDK can parse as error response
+			if let UpstreamError::SecurityGuard { code, message } = &e
+				&& let Some(ref req_id) = req_id
+			{
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
+						code: ErrorCode(-32001), // Custom error code for security violations
+						message: format!("{code}: {message}").into(),
+						data: None,
+					},
+					req_id.clone(),
+				);
+				if let Ok(body) = serde_json::to_string(&error_msg) {
+					return http_json_error(StatusCode::OK, body);
+				}
 			}
 			let err = if let Some(req_id) = req_id {
-				serde_json::to_string(&JsonRpcError {
-					jsonrpc: Default::default(),
-					id: req_id,
-					error: ErrorData {
+				// Use ServerJsonRpcMessage::error for proper SSE compatibility
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
 						code: ErrorCode::INTERNAL_ERROR,
 						message: format!("failed to send message: {e}",).into(),
 						data: None,
 					},
-				})
-				.ok()
+					req_id,
+				);
+				serde_json::to_string(&error_msg).ok()
 			} else {
 				None
 			};
@@ -301,9 +321,51 @@ impl Session {
 							});
 						}
 
+						// Evaluate security guards on tool invocation
+						let arguments_value = ctr.params.arguments
+							.as_ref()
+							.map(|m| serde_json::Value::Object(m.clone()))
+							.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+						match self.relay.evaluate_tool_invoke(tool, &arguments_value, service_name, None) {
+							Ok(mcp::security::GuardDecision::Allow) => {
+								// Continue with the request
+							},
+							Ok(mcp::security::GuardDecision::Deny(reason)) => {
+								tracing::warn!(
+									tool = %tool,
+									code = %reason.code,
+									message = %reason.message,
+									"Security guard denied tool invocation"
+								);
+								return Err(UpstreamError::SecurityGuard {
+									code: reason.code,
+									message: reason.message,
+								});
+							},
+							Ok(mcp::security::GuardDecision::Modify(mcp::security::ModifyAction::Transform(modified))) => {
+								// Apply the modified arguments
+								if let serde_json::Value::Object(map) = modified {
+									ctr.params.arguments = Some(map);
+								}
+							},
+							Ok(mcp::security::GuardDecision::Modify(_)) => {
+								// Other modify actions not supported for tool invoke
+								tracing::warn!("Unsupported modify action for tool invocation");
+							},
+							Err(e) => {
+								tracing::error!(error = %e, "Security guard execution failed");
+								return Err(UpstreamError::SecurityGuard {
+									code: "guard_error".to_string(),
+									message: e.to_string(),
+								});
+							},
+						}
+
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
-						self.relay.send_single(r, ctx, service_name).await
+						// Use guarded send to evaluate responses for PII and other security checks
+						self.relay.send_single_guarded(r, ctx, service_name, true, None).await
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();

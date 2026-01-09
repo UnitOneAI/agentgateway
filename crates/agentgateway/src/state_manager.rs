@@ -192,6 +192,23 @@ impl LocalClient {
 		.await?;
 		info!("loaded config from {:?}", self.cfg);
 
+		// Update guard registry for MCP backends (hot-reload)
+		for backend_with_policies in &config.backends {
+			if let crate::types::agent::Backend::MCP(name, mcp_backend) = &backend_with_policies.backend {
+				let backend_key = format!("{}/{}", name.namespace, name.name);
+				if let Err(e) = self.stores.guard_registry.update_backend(
+					&backend_key,
+					mcp_backend.security_guards.clone(),
+				) {
+					tracing::warn!(
+						backend = %backend_key,
+						error = %e,
+						"Failed to update security guards for backend"
+					);
+				}
+			}
+		}
+
 		// Sync the state
 		let next_binds =
 			self

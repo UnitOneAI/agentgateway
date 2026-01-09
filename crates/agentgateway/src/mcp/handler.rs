@@ -66,6 +66,7 @@ impl Relay {
 		backend: McpBackendGroup,
 		policies: McpAuthorizationSet,
 		client: PolicyClient,
+		guard_registry: crate::mcp::security::GuardExecutorRegistry,
 	) -> anyhow::Result<Self> {
 		let mut is_multiplexing = false;
 		let default_target_name = if backend.targets.len() != 1 {
@@ -77,14 +78,13 @@ impl Relay {
 			Some(backend.targets[0].name.to_string())
 		};
 
-		// Initialize security guards before backend is consumed
-		let security_guards = Arc::new(
-			crate::mcp::security::GuardExecutor::new(backend.security_guards.clone())
-				.unwrap_or_else(|e| {
-					tracing::warn!("Failed to initialize security guards: {}", e);
-					crate::mcp::security::GuardExecutor::empty()
-				})
-		);
+		// Get or create security guards from registry (enables hot-reload)
+		let security_guards = guard_registry
+			.get_or_create(&backend.name, backend.security_guards.clone())
+			.unwrap_or_else(|e| {
+				tracing::warn!("Failed to initialize security guards: {}", e);
+				Arc::new(crate::mcp::security::GuardExecutor::empty())
+			});
 
 		Ok(Self {
 			upstreams: Arc::new(upstream::UpstreamGroup::new(client, backend)?),
@@ -117,6 +117,22 @@ impl Relay {
 	}
 	pub fn default_target_name(&self) -> Option<String> {
 		self.default_target_name.clone()
+	}
+
+	/// Evaluate security guards on a tool invocation
+	pub fn evaluate_tool_invoke(
+		&self,
+		tool_name: &str,
+		arguments: &serde_json::Value,
+		server_name: &str,
+		identity: Option<String>,
+	) -> crate::mcp::security::GuardResult {
+		let context = crate::mcp::security::GuardContext {
+			server_name: server_name.to_string(),
+			identity,
+			metadata: serde_json::Value::Null,
+		};
+		self.security_guards.evaluate_tool_invoke(tool_name, arguments, &context)
 	}
 
 	pub fn merge_tools(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
@@ -338,6 +354,20 @@ impl Relay {
 		ctx: IncomingRequestContext,
 		service_name: &str,
 	) -> Result<Response, UpstreamError> {
+		self.send_single_guarded(r, ctx, service_name, false, None).await
+	}
+
+	/// Send a single request with optional response guard evaluation
+	pub async fn send_single_guarded(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		service_name: &str,
+		evaluate_response: bool,
+		identity: Option<String>,
+	) -> Result<Response, UpstreamError> {
+		use futures_util::StreamExt;
+
 		let id = r.id.clone();
 		let Ok(us) = self.upstreams.get(service_name) else {
 			return Err(UpstreamError::InvalidRequest(format!(
@@ -346,7 +376,34 @@ impl Relay {
 		};
 		let stream = us.generic_stream(r, &ctx).await?;
 
-		messages_to_response(id, stream)
+		if !evaluate_response {
+			return messages_to_response(id, stream);
+		}
+
+		// Wrap the stream to evaluate responses through security guards
+		let guards = self.security_guards.clone();
+		let server_name = service_name.to_string();
+		let identity_clone = identity.clone();
+		let request_id = id.clone();
+
+		let guarded_stream = stream.map(move |result| {
+			match result {
+				Ok(msg) => {
+					// Try to evaluate the response through guards
+					match evaluate_server_message(&msg, &guards, &server_name, identity_clone.clone(), request_id.clone()) {
+						Ok(modified_msg) => Ok(modified_msg),
+						Err(e) => {
+							tracing::warn!(error = %e, "Guard evaluation failed on response");
+							// On guard error, return original message (fail-open for responses)
+							Ok(msg)
+						}
+					}
+				},
+				Err(e) => Err(e),
+			}
+		});
+
+		messages_to_response(id, guarded_stream)
 	}
 	// For some requests, we don't have a sane mapping of incoming requests to a specific
 	// downstream service when multiplexing. Only forward when we have only one backend.
@@ -495,5 +552,64 @@ fn accepted_response() -> Response {
 		.status(StatusCode::ACCEPTED)
 		.body(crate::http::Body::empty())
 		.expect("valid response")
+}
+
+/// Evaluate a server message through security guards
+fn evaluate_server_message(
+	msg: &ServerJsonRpcMessage,
+	guards: &crate::mcp::security::GuardExecutor,
+	server_name: &str,
+	identity: Option<String>,
+	request_id: RequestId,
+) -> Result<ServerJsonRpcMessage, String> {
+	// Convert message to JSON for guard evaluation
+	let json_value = serde_json::to_value(msg)
+		.map_err(|e| format!("Failed to serialize message: {}", e))?;
+
+	let context = crate::mcp::security::GuardContext {
+		server_name: server_name.to_string(),
+		identity,
+		metadata: serde_json::Value::Null,
+	};
+
+	// Evaluate through guards (using Response phase)
+	match guards.evaluate_response(&json_value, &context) {
+		Ok(crate::mcp::security::GuardDecision::Allow) => {
+			// No modification needed
+			Ok(msg.clone())
+		},
+		Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+			tracing::warn!(
+				code = %reason.code,
+				message = %reason.message,
+				"Security guard denied response"
+			);
+			// Return an error message with the correct request ID
+			Ok(ServerJsonRpcMessage::error(
+				ErrorData::new(rmcp::model::ErrorCode(-32001), format!("Security guard denied: {}", reason.message), None),
+				request_id,
+			))
+		},
+		Ok(crate::mcp::security::GuardDecision::Modify(crate::mcp::security::ModifyAction::Transform(modified_json))) => {
+			// Try to deserialize back to ServerJsonRpcMessage
+			match serde_json::from_value::<ServerJsonRpcMessage>(modified_json) {
+				Ok(modified_msg) => {
+					tracing::debug!("Response modified by security guard");
+					Ok(modified_msg)
+				},
+				Err(e) => {
+					tracing::warn!(error = %e, "Failed to deserialize modified response, using original");
+					Ok(msg.clone())
+				}
+			}
+		},
+		Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
+			// Other modify actions not supported
+			Ok(msg.clone())
+		},
+		Err(e) => {
+			Err(format!("Guard evaluation error: {}", e))
+		}
+	}
 }
 
