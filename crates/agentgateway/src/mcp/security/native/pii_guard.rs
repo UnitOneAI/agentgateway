@@ -111,10 +111,37 @@ impl PiiGuard {
 
 	/// Apply masking to text, replacing PII with <ENTITY_TYPE> placeholders
 	fn mask_text(&self, text: &str, results: &[pii::RecognizerResult]) -> String {
-		let mut masked = text.to_string();
+		if results.is_empty() {
+			return text.to_string();
+		}
 
-		// Results are already sorted in reverse order
+		// Filter out overlapping results (keep first match when overlapping)
+		// Results are already sorted in reverse order (end to start)
+		let mut non_overlapping: Vec<&pii::RecognizerResult> = Vec::new();
 		for result in results {
+			// Validate byte indices are within bounds and at char boundaries
+			if result.start > text.len()
+				|| result.end > text.len()
+				|| !text.is_char_boundary(result.start)
+				|| !text.is_char_boundary(result.end)
+			{
+				continue;
+			}
+
+			// Check for overlap with already selected results
+			let overlaps = non_overlapping.iter().any(|existing| {
+				// Since results are sorted in reverse, existing results start after current
+				result.end > existing.start && result.start < existing.end
+			});
+
+			if !overlaps {
+				non_overlapping.push(result);
+			}
+		}
+
+		// Build new string with replacements (processing from end to start)
+		let mut masked = text.to_string();
+		for result in non_overlapping {
 			masked.replace_range(
 				result.start..result.end,
 				&format!("<{}>", result.entity_type.to_uppercase()),
@@ -598,6 +625,409 @@ rejection_message: "PII not allowed in MCP requests"
 					let email = contact["email"].as_str().unwrap();
 					assert!(email.contains("<EMAIL_ADDRESS>"));
 				}
+			},
+			other => panic!("Expected Modify decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_url_detection() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Url],
+			action: PiiAction::Mask,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let test_cases = vec![
+			("https://example.com/path", true),
+			("http://api.service.io/v1/data", true),
+			("https://subdomain.example.org:8080/path?query=1", true),
+			("just some text", false),
+			("not a url at all", false),
+		];
+
+		for (url, should_detect) in test_cases {
+			let request = serde_json::json!({
+				"link": url
+			});
+
+			let result = guard.evaluate_request(&request, &context);
+
+			if should_detect {
+				assert!(
+					matches!(result, Ok(GuardDecision::Modify(_))),
+					"Expected URL '{}' to be detected and masked, got {:?}",
+					url, result
+				);
+			} else {
+				assert!(
+					matches!(result, Ok(GuardDecision::Allow)),
+					"Expected '{}' to be allowed (no URL), got {:?}",
+					url, result
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn test_phone_number_formats() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::PhoneNumber],
+			action: PiiAction::Reject,
+			min_score: 0.0,
+			rejection_message: Some("Phone numbers not allowed".to_string()),
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		// Test various phone formats (based on phonenumber library validation)
+		let test_cases = vec![
+			("(123) 456-7890", true),         // US format with parens
+			("555-123-4567", true),           // US format with dashes
+			("+1-800-555-1234", true),        // International US with dashes
+			("555.123.4567", true),           // US format with dots
+			("12345", false),                 // Too short
+			("hello world", false),           // No numbers
+		];
+
+		for (phone, should_detect) in test_cases {
+			let request = serde_json::json!({
+				"contact": phone
+			});
+
+			let result = guard.evaluate_request(&request, &context);
+
+			if should_detect {
+				assert!(
+					matches!(result, Ok(GuardDecision::Deny(_))),
+					"Expected phone '{}' to be detected and rejected, got {:?}",
+					phone, result
+				);
+			} else {
+				assert!(
+					matches!(result, Ok(GuardDecision::Allow)),
+					"Expected '{}' to be allowed (no phone), got {:?}",
+					phone, result
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn test_canadian_sin_detection() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::CaSin],
+			action: PiiAction::Reject,
+			min_score: 0.0,
+			rejection_message: Some("Canadian SIN not allowed".to_string()),
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let test_cases = vec![
+			("046-454-286", true),            // Formatted with dashes
+			("046 454 286", true),            // Formatted with spaces
+			("046454286", true),              // Unformatted 9 digits
+			("12345", false),                 // Too short
+			("hello world", false),           // No numbers
+		];
+
+		for (sin, should_detect) in test_cases {
+			let request = serde_json::json!({
+				"id": sin
+			});
+
+			let result = guard.evaluate_request(&request, &context);
+
+			if should_detect {
+				assert!(
+					matches!(result, Ok(GuardDecision::Deny(_))),
+					"Expected SIN '{}' to be detected and rejected, got {:?}",
+					sin, result
+				);
+			} else {
+				assert!(
+					matches!(result, Ok(GuardDecision::Allow)),
+					"Expected '{}' to be allowed (no SIN), got {:?}",
+					sin, result
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn test_tool_invoke_evaluation() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email, PiiType::Ssn],
+			action: PiiAction::Mask,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let arguments = serde_json::json!({
+			"user_email": "john.doe@company.com",
+			"ssn": "123-45-6789",
+			"query": "find user data"
+		});
+
+		let result = guard.evaluate_tool_invoke("search_tool", &arguments, &context);
+
+		match result {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(masked))) => {
+				assert!(
+					masked["user_email"].as_str().unwrap().contains("<EMAIL_ADDRESS>"),
+					"Expected email to be masked"
+				);
+				assert!(
+					masked["ssn"].as_str().unwrap().contains("<SSN>"),
+					"Expected SSN to be masked"
+				);
+				assert_eq!(
+					masked["query"].as_str().unwrap(),
+					"find user data",
+					"Non-PII field should not be modified"
+				);
+			},
+			other => panic!("Expected Modify decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_tool_invoke_rejection() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::CreditCard],
+			action: PiiAction::Reject,
+			min_score: 0.0,
+			rejection_message: Some("Credit card data not allowed in tool calls".to_string()),
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let arguments = serde_json::json!({
+			"payment_info": "4111111111111111"
+		});
+
+		let result = guard.evaluate_tool_invoke("process_payment", &arguments, &context);
+
+		match result {
+			Ok(GuardDecision::Deny(reason)) => {
+				assert_eq!(reason.code, "pii_detected");
+				assert!(reason.message.contains("Credit card data not allowed"));
+			},
+			other => panic!("Expected Deny decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_response_evaluation() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email, PiiType::PhoneNumber],
+			action: PiiAction::Mask,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let response = serde_json::json!({
+			"result": {
+				"users": [
+					{"name": "John", "email": "john@example.com", "phone": "(555) 111-2222"},
+					{"name": "Jane", "email": "jane@example.com", "phone": "(555) 333-4444"}
+				]
+			}
+		});
+
+		let result = guard.evaluate_response(&response, &context);
+
+		match result {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(masked))) => {
+				let users = masked["result"]["users"].as_array().unwrap();
+				for user in users {
+					assert!(
+						user["email"].as_str().unwrap().contains("<EMAIL_ADDRESS>"),
+						"Expected email to be masked in response"
+					);
+					assert!(
+						user["phone"].as_str().unwrap().contains("<PHONE_NUMBER>"),
+						"Expected phone to be masked in response"
+					);
+				}
+			},
+			other => panic!("Expected Modify decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_tools_list_pii_in_description_reject() {
+		use rmcp::model::Tool;
+		use std::borrow::Cow;
+		use std::sync::Arc;
+
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email],
+			action: PiiAction::Reject,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let tool_with_pii = Tool {
+			name: Cow::Owned("email_tool".to_string()),
+			description: Some(Cow::Owned(
+				"Contact support at admin@internal.company.com for help".to_string(),
+			)),
+			icons: None,
+			title: None,
+			meta: None,
+			input_schema: Arc::new(
+				serde_json::from_value(serde_json::json!({"type": "object"})).unwrap(),
+			),
+			annotations: None,
+			output_schema: None,
+		};
+
+		let result = guard.evaluate_tools_list(&[tool_with_pii], &context);
+
+		match result {
+			Ok(GuardDecision::Deny(reason)) => {
+				assert_eq!(reason.code, "pii_in_tool_description");
+				assert!(reason.message.contains("email_tool"));
+			},
+			other => panic!("Expected Deny decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_tools_list_clean_descriptions() {
+		use rmcp::model::Tool;
+		use std::borrow::Cow;
+		use std::sync::Arc;
+
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email, PiiType::PhoneNumber, PiiType::Ssn],
+			action: PiiAction::Reject,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let clean_tool = Tool {
+			name: Cow::Owned("file_reader".to_string()),
+			description: Some(Cow::Owned(
+				"Reads files from the local filesystem".to_string(),
+			)),
+			icons: None,
+			title: None,
+			meta: None,
+			input_schema: Arc::new(
+				serde_json::from_value(serde_json::json!({"type": "object"})).unwrap(),
+			),
+			annotations: None,
+			output_schema: None,
+		};
+
+		let result = guard.evaluate_tools_list(&[clean_tool], &context);
+		assert!(matches!(result, Ok(GuardDecision::Allow)));
+	}
+
+	#[test]
+	fn test_deeply_nested_pii() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email],
+			action: PiiAction::Mask,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let request = serde_json::json!({
+			"level1": {
+				"level2": {
+					"level3": {
+						"level4": {
+							"email": "deeply@nested.com"
+						}
+					}
+				}
+			}
+		});
+
+		let result = guard.evaluate_request(&request, &context);
+
+		match result {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(masked))) => {
+				let email = masked["level1"]["level2"]["level3"]["level4"]["email"]
+					.as_str()
+					.unwrap();
+				assert!(
+					email.contains("<EMAIL_ADDRESS>"),
+					"Expected deeply nested email to be masked: {}",
+					email
+				);
+			},
+			other => panic!("Expected Modify decision, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_mixed_pii_types_in_single_field() {
+		let config = PiiGuardConfig {
+			detect: vec![PiiType::Email, PiiType::PhoneNumber],
+			action: PiiAction::Mask,
+			min_score: 0.0,
+			rejection_message: None,
+		};
+
+		let guard = PiiGuard::new(config);
+		let context = create_test_context();
+
+		let request = serde_json::json!({
+			"message": "Contact me at user@example.com or call (555) 123-4567"
+		});
+
+		let result = guard.evaluate_request(&request, &context);
+
+		match result {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(masked))) => {
+				let msg = masked["message"].as_str().unwrap();
+				assert!(
+					msg.contains("<EMAIL_ADDRESS>"),
+					"Expected email to be masked: {}",
+					msg
+				);
+				assert!(
+					msg.contains("<PHONE_NUMBER>"),
+					"Expected phone to be masked: {}",
+					msg
+				);
+				assert!(
+					!msg.contains("user@example.com"),
+					"Original email should be removed: {}",
+					msg
+				);
+				assert!(
+					!msg.contains("(555) 123-4567"),
+					"Original phone should be removed: {}",
+					msg
+				);
 			},
 			other => panic!("Expected Modify decision, got {:?}", other),
 		}
