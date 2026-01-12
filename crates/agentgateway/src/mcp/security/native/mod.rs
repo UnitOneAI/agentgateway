@@ -10,11 +10,13 @@ mod tool_poisoning;
 mod rug_pull;
 mod tool_shadowing;
 mod server_whitelist;
+mod pii_detection;
 
 pub use tool_poisoning::{ToolPoisoningDetector, ToolPoisoningConfig};
 pub use rug_pull::{RugPullDetector, RugPullConfig};
 pub use tool_shadowing::{ToolShadowingDetector, ToolShadowingConfig};
 pub use server_whitelist::{ServerWhitelistChecker, ServerWhitelistConfig};
+pub use pii_detection::{PiiDetector, PiiDetectionConfig};
 
 use super::{GuardContext, GuardDecision, GuardResult};
 

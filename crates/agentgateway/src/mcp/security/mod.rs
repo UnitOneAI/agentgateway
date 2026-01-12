@@ -16,7 +16,7 @@ pub mod native;
 pub mod wasm;
 
 // Re-export core types
-pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, ServerWhitelistChecker};
+pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, ServerWhitelistChecker, PiiDetector};
 
 /// Security guard that can be applied to MCP protocol operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +80,9 @@ pub enum McpGuardKind {
 
     /// Server Whitelist Enforcement (native)
     ServerWhitelist(native::ServerWhitelistConfig),
+
+    /// PII Detection (native)
+    PiiDetection(native::PiiDetectionConfig),
 
     /// Custom WASM module
     #[cfg(feature = "wasm-guards")]
@@ -234,6 +237,9 @@ impl GuardExecutor {
 				},
 				McpGuardKind::ServerWhitelist(cfg) => {
 					Arc::new(native::ServerWhitelistChecker::new(cfg.clone()))
+				},
+				McpGuardKind::PiiDetection(cfg) => {
+					Arc::new(native::PiiDetector::new(cfg.clone())?)
 				},
 				#[cfg(feature = "wasm-guards")]
 				McpGuardKind::Wasm(_cfg) => {
