@@ -8,6 +8,31 @@ UnitOne's fork of the open source agentgateway project. Agentgateway is a data p
 - **UnitOne Fork**: `git@github.com:UnitOneAI/agentgateway.git`
 - **Purpose of Fork**: UnitOne-specific features, testing, and potential contributions back to upstream
 
+## Current Sprint (Jan 12-19, 2026)
+
+### Active Work Items
+- **MCP Security Guards Development** (Alexey)
+  - Bring security guard configuration from image to dashboard (runtime configuration)
+  - Add rug pull detection probe with memory/context tracking across requests
+  - End-to-end testing and stress testing for security guards
+  - Sync latest changes from upstream main branch
+
+### Completed This Sprint
+- ✅ Tool Poisoning Detection probe (detects prompt injection, system override attempts)
+- ✅ PII Detection probe (masks/blocks sensitive information)
+- ✅ Demo-ready implementation with both probes functional
+
+### Sprint Goals
+- Make security guard configuration dynamic via dashboard
+- Implement rug pull detection (tools advertise different capabilities than they deliver)
+- Ensure upstream compatibility and clean merge path
+- Validate security guards under load with stress tests
+
+### Notes
+- Focus on AgentGateway features, infrastructure handled by Surinder
+- Google Auth issue noted but deprioritized
+- Maintain clean fork for potential upstream contribution
+
 ## Core Functionality
 - **Protocol Support**: Native A2A and MCP protocol implementation
 - **Security**: RBAC system for agent and tool access control
