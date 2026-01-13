@@ -8,30 +8,89 @@ UnitOne's fork of the open source agentgateway project. Agentgateway is a data p
 - **UnitOne Fork**: `git@github.com:UnitOneAI/agentgateway.git`
 - **Purpose of Fork**: UnitOne-specific features, testing, and potential contributions back to upstream
 
-## Current Sprint (Jan 12-19, 2026)
+## Project Vision & Strategic Direction
 
-### Active Work Items
-- **MCP Security Guards Development** (Alexey)
-  - Bring security guard configuration from image to dashboard (runtime configuration)
-  - Add rug pull detection probe with memory/context tracking across requests
-  - End-to-end testing and stress testing for security guards
-  - Sync latest changes from upstream main branch
+### Long-term Goals (Q1-Q2 2026)
+**Vision**: Become the standard security and observability layer for all MCP (Model Context Protocol) communications in UnitOne's AI agent ecosystem.
 
-### Completed This Sprint
-- ✅ Tool Poisoning Detection probe (detects prompt injection, system override attempts)
-- ✅ PII Detection probe (masks/blocks sensitive information)
-- ✅ Demo-ready implementation with both probes functional
+**Key Objectives**:
+- Production-ready MCP security guard framework with pluggable detection probes
+- Real-time threat detection and prevention for agent-to-tool communication
+- Observable and governable multi-agent workflows
+- Contribute core security features back to upstream agentgateway project
 
-### Sprint Goals
-- Make security guard configuration dynamic via dashboard
-- Implement rug pull detection (tools advertise different capabilities than they deliver)
-- Ensure upstream compatibility and clean merge path
-- Validate security guards under load with stress tests
+### Current Phase: **Security Guard MVP** (Weeks 1-4, Q1 2026)
+**Goal**: Demonstrate MCP security monitoring with 3-4 detection probes
+**Success Criteria**: Live demo showing threat prevention on Azure deployment
+**Status**: Tool Poisoning and PII Detection probes complete and demo-ready
 
-### Notes
-- Focus on AgentGateway features, infrastructure handled by Surinder
-- Google Auth issue noted but deprioritized
-- Maintain clean fork for potential upstream contribution
+## Recent Significant Changes
+
+### Architecture: MCP Security Guards Framework (Jan 2026)
+**What Changed**: Added native security guard system for MCP protocol monitoring
+- **Location**: `crates/agentgateway/src/mcp/security/native/`
+- **Capabilities**: Real-time request/response inspection, threat detection, policy enforcement
+- **Probes Implemented**:
+  - Tool Poisoning Detection (`tool_poisoning.rs`) - detects prompt injection, system override attempts
+  - PII Detection (`pii.rs`) - masks/blocks sensitive information in transit
+- **Current Limitation**: Guard configuration baked into Docker image
+
+**Why This Matters**: MCP protocol enables powerful tool access for LLMs, creating new attack surfaces:
+- Malicious tools can inject prompts to manipulate LLM behavior
+- Tools may leak PII or sensitive data through responses
+- Need runtime protection layer without modifying client/server implementations
+
+**Technical Foundation**: Rust-based guards with regex pattern matching, JSON schema validation, and configurable actions (allow/deny/mask).
+
+### Integration: UnitOne Control Plane (In Design, Jan 2026)
+**What's Coming**: AgentGateway Dashboard will integrate with UnitOne's broader control plane
+- **Question**: Where's the boundary between MCP-specific features vs. wider agent observability?
+- **UI Strategy**: Embedded iframe vs. standalone dashboard with shared identity system
+- **Impact**: Unified agent governance across MCP and non-MCP communication patterns
+
+## Current Focus Areas (Jan 12-19, 2026)
+
+### Theme 1: Runtime Security Guard Configuration
+**Goal**: Move guard configuration from baked-in Docker image to runtime dashboard API
+**Why Now**: Current approach requires image rebuild for every config change; not scalable for production
+**Impact**:
+- Enable dynamic security policies per MCP server
+- Faster iteration on detection rules without redeployment
+- Support customer-specific security requirements
+
+**Technical Approach**: Dashboard CRUD APIs for guard configuration, persistent storage, runtime policy loading
+
+### Theme 2: Stateful Threat Detection
+**Goal**: Implement "rug pull" detection - tools that advertise different capabilities than they deliver
+**Why Now**: Current probes are stateless (per-request); need to validate framework supports cross-request pattern matching
+**Impact**:
+- Proves guard framework can handle sophisticated multi-step attacks
+- Enables detection of behavioral anomalies over time
+- Opens path for ML-based anomaly detection
+
+**Technical Challenge**: Requires memory/context tracking across requests while maintaining performance
+
+### Theme 3: Production Validation
+**Goal**: End-to-end testing, stress testing, upstream compatibility
+**Why Now**: Moving from proof-of-concept to production Azure deployment
+**Impact**:
+- Confidence in reliability and performance under load
+- Ensures clean merge path to upstream for potential contributions
+- Validates guard overhead is acceptable (<50ms P99 latency target)
+
+## Evolution Notes
+
+### Fork Strategy (Jan 2026)
+**Divergence Point**: UnitOne fork specialized in MCP security while upstream focuses on general-purpose agent gateway
+- **Upstream**: Protocol-agnostic agent routing and observability
+- **UnitOne**: Deep MCP security specialization with detection probes
+- **Contribution Path**: Keep security guard framework upstreamable; contribute when proven in production
+
+### Build & Deployment (Jan 2026)
+**Shift**: From manual builds to dual-mode automation (covered in unitone-agentgateway repo)
+- Production: ACR Task auto-builds on push to main
+- Development: Local builds for rapid iteration
+- Infrastructure managed in sibling terraform repository
 
 ## Core Functionality
 - **Protocol Support**: Native A2A and MCP protocol implementation
