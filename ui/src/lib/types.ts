@@ -288,6 +288,7 @@ export interface McpBackend {
   name?: string;
   targets: McpTarget[];
   statefulMode?: McpStatefulMode;
+  securityGuards?: SecurityGuard[];
 }
 
 // UI-friendly flat structure (matches local config format for write path)
@@ -479,3 +480,88 @@ export type PlaygroundListener = z.infer<typeof PlaygroundListenerSchema>;
 export interface ListenerInfo extends Listener {
   displayEndpoint: string;
 }
+
+// =============================================================================
+// Security Guards Types
+// =============================================================================
+
+// Guard phase types (matches Rust GuardPhase enum)
+export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
+
+// Failure mode (matches Rust FailureMode enum)
+export type FailureMode = "fail_closed" | "fail_open";
+
+// Guard types (matches Rust McpGuardKind enum)
+export type SecurityGuardType =
+  | "tool_poisoning"
+  | "rug_pull"
+  | "tool_shadowing"
+  | "server_whitelist"
+  | "pii";
+
+// PII types (matches Rust PiiType enum)
+export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
+
+// PII action (matches Rust PiiAction enum)
+export type PiiAction = "mask" | "reject";
+
+// Scan fields for tool poisoning
+export type ScanField = "name" | "description" | "input_schema";
+
+// Base security guard interface (common fields)
+export interface SecurityGuardBase {
+  id: string;
+  description?: string;
+  enabled: boolean;
+  priority: number;
+  timeout_ms: number;
+  failure_mode: FailureMode;
+  runs_on: GuardPhase[];
+}
+
+// Tool Poisoning config
+export interface ToolPoisoningGuard extends SecurityGuardBase {
+  type: "tool_poisoning";
+  strict_mode: boolean;
+  custom_patterns: string[];
+  scan_fields: ScanField[];
+  alert_threshold: number;
+}
+
+// Rug Pull config
+export interface RugPullGuard extends SecurityGuardBase {
+  type: "rug_pull";
+  risk_threshold: number;
+}
+
+// Tool Shadowing config
+export interface ToolShadowingGuard extends SecurityGuardBase {
+  type: "tool_shadowing";
+  block_duplicates: boolean;
+  protected_names: string[];
+}
+
+// Server Whitelist config
+export interface ServerWhitelistGuard extends SecurityGuardBase {
+  type: "server_whitelist";
+  allowed_servers: string[];
+  detect_typosquats: boolean;
+  similarity_threshold: number;
+}
+
+// PII Guard config
+export interface PiiGuard extends SecurityGuardBase {
+  type: "pii";
+  detect: PiiType[];
+  action: PiiAction;
+  min_score: number;
+  rejection_message?: string;
+}
+
+// Union type for all security guards
+export type SecurityGuard =
+  | ToolPoisoningGuard
+  | RugPullGuard
+  | ToolShadowingGuard
+  | ServerWhitelistGuard
+  | PiiGuard;
