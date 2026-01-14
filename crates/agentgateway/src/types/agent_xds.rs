@@ -1762,19 +1762,19 @@ fn convert_regex_rules(
 					Ok(builtin) => {
 						let builtin = match builtin {
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::Ssn => {
-								pii::PiiType::Ssn
+								llm::policy::Builtin::Ssn
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::CreditCard => {
-								pii::PiiType::CreditCard
+								llm::policy::Builtin::CreditCard
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::PhoneNumber => {
-								pii::PiiType::PhoneNumber
+								llm::policy::Builtin::PhoneNumber
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::Email => {
-								pii::PiiType::Email
+								llm::policy::Builtin::Email
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::CaSin => {
-								pii::PiiType::CaSin
+								llm::policy::Builtin::CaSin
 							},
 							_ => {
 								warn!(value = *b, "Unknown builtin regex rule, skipping");

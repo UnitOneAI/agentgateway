@@ -16,9 +16,7 @@ use crate::*;
 pub mod webhook;
 
 mod moderation;
-
-// Use shared PII module
-use crate::pii;
+mod pii;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -661,7 +659,14 @@ impl Policy {
 		for r in &rgx.rules {
 			match r {
 				RegexRule::Builtin { builtin } => {
-					let results = builtin.recognizer().recognize(&current_content);
+					let rec = match builtin {
+						Builtin::Ssn => &*pii::SSN,
+						Builtin::CreditCard => &*pii::CC,
+						Builtin::PhoneNumber => &*pii::PHONE,
+						Builtin::Email => &*pii::EMAIL,
+						Builtin::CaSin => &*pii::CA_SIN,
+					};
+					let results = pii::recognizer(rec, &current_content);
 
 					if !results.is_empty() {
 						match &rgx.action {
@@ -793,7 +798,7 @@ pub struct RegexRules {
 #[serde(untagged)]
 pub enum RegexRule {
 	Builtin {
-		builtin: pii::PiiType,
+		builtin: Builtin,
 	},
 	Regex {
 		#[serde(with = "serde_regex")]
@@ -820,7 +825,15 @@ impl RequestRejection {
 	}
 }
 
-// Builtin PII type enum has been moved to crate::pii::PiiType
+#[apply(schema!)]
+pub enum Builtin {
+	#[serde(rename = "ssn")]
+	Ssn,
+	CreditCard,
+	PhoneNumber,
+	Email,
+	CaSin,
+}
 
 #[apply(schema!)]
 pub struct Rule<T> {
