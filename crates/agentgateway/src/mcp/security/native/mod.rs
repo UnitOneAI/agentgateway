@@ -12,7 +12,7 @@ mod server_whitelist;
 mod pii_guard;
 
 pub use tool_poisoning::{ToolPoisoningDetector, ToolPoisoningConfig};
-pub use rug_pull::{RugPullDetector, RugPullConfig};
+pub use rug_pull::{RugPullDetector, RugPullConfig, ChangeDetectionConfig};
 pub use tool_shadowing::{ToolShadowingDetector, ToolShadowingConfig};
 pub use server_whitelist::{ServerWhitelistChecker, ServerWhitelistConfig};
 pub use pii_guard::{PiiGuard, PiiGuardConfig, PiiType, PiiAction};
@@ -73,6 +73,13 @@ pub trait NativeGuard: Send + Sync {
         );
         let _ = (response, context);
         Ok(GuardDecision::Allow)
+    }
+
+    /// Reset state for a server (called on session re-initialization)
+    /// Guards that track per-server state (like baselines) should clear it here.
+    fn reset_server(&self, server_name: &str) {
+        // Default: no-op (most guards are stateless)
+        let _ = server_name;
     }
 }
 

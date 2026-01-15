@@ -236,11 +236,25 @@ impl Session {
 				let ctx = IncomingRequestContext::new(parts);
 				match &mut r.request {
 					ClientRequest::InitializeRequest(ir) => {
+						// Reset security guard state on session re-initialization
+						// This clears baselines so rug pull detection starts fresh
+						self.relay.reset_all_security_guards();
+
 						let pv = ir.params.protocol_version.clone();
-						self
+						let result = self
 							.relay
-							.send_fanout(r, ctx, self.relay.merge_initialize(pv))
-							.await
+							.send_fanout(r, ctx.clone(), self.relay.merge_initialize(pv))
+							.await;
+
+						// Spawn background task to establish security baselines
+						// This fetches tools/list from all upstreams to create initial baselines
+						// for rug pull detection without blocking the initialize response
+						let relay = self.relay.clone();
+						tokio::spawn(async move {
+							relay.establish_security_baselines(ctx).await;
+						});
+
+						result
 					},
 					ClientRequest::ListToolsRequest(_) => {
 						log.non_atomic_mutate(|l| {

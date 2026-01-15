@@ -582,6 +582,20 @@ impl GuardExecutor {
 		// For now, just execute synchronously
 		f()
 	}
+
+	/// Reset state for a server (called on session re-initialization)
+	/// This clears any per-server state like baselines in guards.
+	pub fn reset_server(&self, server_name: &str) {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		for guard_entry in guards.iter() {
+			guard_entry.guard.reset_server(server_name);
+		}
+		tracing::debug!(
+			server = %server_name,
+			guard_count = guards.len(),
+			"Reset server state across all guards"
+		);
+	}
 }
 
 #[cfg(test)]

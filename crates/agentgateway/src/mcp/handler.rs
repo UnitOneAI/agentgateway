@@ -135,75 +135,190 @@ impl Relay {
 		self.security_guards.evaluate_tool_invoke(tool_name, arguments, &context)
 	}
 
+	/// Reset security guard state for all upstream servers (called on session re-initialization)
+	pub fn reset_all_security_guards(&self) {
+		for (name, _) in self.upstreams.iter_named() {
+			self.security_guards.reset_server(&name);
+		}
+		tracing::info!("Reset security guard state for all upstream servers");
+	}
+
+	/// Fetch tools from all upstreams and establish security guard baselines.
+	/// This is called after initialization to ensure baselines exist before any tools/call.
+	/// Runs asynchronously and doesn't block the initialization response.
+	pub async fn establish_security_baselines(&self, ctx: IncomingRequestContext) {
+		use futures_util::StreamExt;
+
+		tracing::info!("Establishing security guard baselines for all upstreams");
+
+		for (server_name, upstream) in self.upstreams.iter_named() {
+			// Create a tools/list request
+			let request = JsonRpcRequest {
+				jsonrpc: Default::default(),
+				id: RequestId::Number(0),
+				request: ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest {
+					method: Default::default(),
+					params: None,
+					extensions: Default::default(),
+				}),
+			};
+
+			// Send the request and collect tools
+			match upstream.generic_stream(request, &ctx).await {
+				Ok(stream) => {
+					// Collect the response
+					let messages: Vec<_> = stream.collect().await;
+					for msg in messages {
+						match msg {
+							Ok(rmcp::model::ServerJsonRpcMessage::Response(resp)) => {
+								if let rmcp::model::ServerResult::ListToolsResult(ltr) = resp.result {
+									let tools = ltr.tools;
+									tracing::info!(
+										server = %server_name,
+										tool_count = tools.len(),
+										"Fetched tools for baseline establishment"
+									);
+
+									// Evaluate through guards to establish baseline
+									let context = crate::mcp::security::GuardContext {
+										server_name: server_name.to_string(),
+										identity: None,
+										metadata: serde_json::Value::Null,
+									};
+
+									match self.security_guards.evaluate_tools_list(&tools, &context) {
+										Ok(crate::mcp::security::GuardDecision::Allow) => {
+											tracing::info!(
+												server = %server_name,
+												"Baseline established successfully"
+											);
+										},
+										Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+											tracing::warn!(
+												server = %server_name,
+												code = %reason.code,
+												"Initial baseline denied (unexpected)"
+											);
+										},
+										Ok(_) | Err(_) => {
+											tracing::warn!(
+												server = %server_name,
+												"Baseline establishment had issues"
+											);
+										},
+									}
+								}
+							},
+							Ok(_) => {
+								// Notifications or other messages, ignore
+							},
+							Err(e) => {
+								tracing::warn!(
+									server = %server_name,
+									error = %e,
+									"Error fetching tools for baseline"
+								);
+							},
+						}
+					}
+				},
+				Err(e) => {
+					tracing::warn!(
+						server = %server_name,
+						error = %e,
+						"Failed to fetch tools for baseline establishment"
+					);
+				},
+			}
+		}
+
+		tracing::info!("Security guard baseline establishment complete");
+	}
+
 	pub fn merge_tools(&self, cel: Arc<ContextBuilder>) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		let default_target_name = self.default_target_name.clone();
 		let security_guards = self.security_guards.clone();
 		Box::new(move |streams| {
-			let tools = streams
-				.into_iter()
-				.flat_map(|(server_name, s)| {
-					let tools = match s {
-						ServerResult::ListToolsResult(ltr) => ltr.tools,
-						_ => vec![],
-					};
-					tools
-						.into_iter()
-						// Apply authorization policies, filtering tools that are not allowed.
-						.filter(|t| {
-							policies.validate(
-								&rbac::ResourceType::Tool(rbac::ResourceId::new(
-									server_name.to_string(),
-									t.name.to_string(),
-								)),
-								&cel,
-							)
-						})
-						// Rename to handle multiplexing
-						.map(|t| Tool {
-							name: Cow::Owned(resource_name(
-								default_target_name.as_ref(),
-								server_name.as_str(),
-								&t.name,
+			let mut all_tools = Vec::new();
+
+			// Process each server's tools individually for security guard evaluation
+			for (server_name, s) in streams.into_iter() {
+				let tools = match s {
+					ServerResult::ListToolsResult(ltr) => ltr.tools,
+					_ => vec![],
+				};
+
+				// Execute security guards on this server's tools list BEFORE merging
+				// This ensures baselines are stored per-server, not under "merged"
+				let context = crate::mcp::security::GuardContext {
+					server_name: server_name.to_string(),
+					identity: None,
+					metadata: serde_json::Value::Null,
+				};
+
+				match security_guards.evaluate_tools_list(&tools, &context) {
+					Ok(crate::mcp::security::GuardDecision::Allow) => {
+						// Continue normally - add tools to merged list
+					},
+					Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+						tracing::error!(
+							server = %server_name,
+							code = %reason.code,
+							message = %reason.message,
+							"Security guard denied tools list for server"
+						);
+						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
+							"Security guard denied for server '{}': {} - {}", server_name, reason.code, reason.message
+						)));
+					},
+					Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
+						// TODO: Implement modification logic
+						tracing::warn!(
+							server = %server_name,
+							"Security guard requested modification, but modification is not yet implemented"
+						);
+					},
+					Err(e) => {
+						tracing::error!(
+							server = %server_name,
+							error = %e,
+							"Security guard execution failed"
+						);
+						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
+							"Security guard failed for server '{}': {}", server_name, e
+						)));
+					},
+				}
+
+				// Apply authorization policies and rename for multiplexing
+				let filtered_tools = tools
+					.into_iter()
+					.filter(|t| {
+						policies.validate(
+							&rbac::ResourceType::Tool(rbac::ResourceId::new(
+								server_name.to_string(),
+								t.name.to_string(),
 							)),
-							..t
-						})
-						.collect_vec()
-				})
-				.collect_vec();
+							&cel,
+						)
+					})
+					.map(|t| Tool {
+						name: Cow::Owned(resource_name(
+							default_target_name.as_ref(),
+							server_name.as_str(),
+							&t.name,
+						)),
+						..t
+					})
+					.collect_vec();
 
-			// Execute security guards on the tools list
-			let context = crate::mcp::security::GuardContext {
-				server_name: "merged".to_string(),
-				identity: None,
-				metadata: serde_json::Value::Null,
-			};
-
-			match security_guards.evaluate_tools_list(&tools, &context) {
-				Ok(crate::mcp::security::GuardDecision::Allow) => {
-					// Continue normally
-				},
-				Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
-					tracing::error!("Security guard denied tools list: {} - {}", reason.code, reason.message);
-					return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
-						"Security guard denied: {} - {}", reason.code, reason.message
-					)));
-				},
-				Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
-					// TODO: Implement modification logic
-					tracing::warn!("Security guard requested modification, but modification is not yet implemented");
-				},
-				Err(e) => {
-					tracing::error!("Security guard execution failed: {}", e);
-					return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
-						"Security guard failed: {}", e
-					)));
-				},
+				all_tools.extend(filtered_tools);
 			}
 
 			Ok(
 				ListToolsResult {
-					tools,
+					tools: all_tools,
 					next_cursor: None,
 					meta: None,
 				}
