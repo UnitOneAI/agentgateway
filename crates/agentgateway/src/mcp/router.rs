@@ -116,11 +116,13 @@ impl App {
 			};
 
 			McpBackendGroup {
+				name: format!("{}/{}", backend_group_name.namespace, backend_group_name.name),
 				targets: nt,
 				stateful: backend.stateful,
-			security_guards: backend.security_guards.clone(),
+				security_guards: backend.security_guards.clone(),
 			}
 		};
+		let guard_registry = self.state.guard_registry.clone();
 		let sm = self.session.clone();
 		let client = PolicyClient { inputs: pi.clone() };
 		let authorization_policies = backend_policies
@@ -227,12 +229,14 @@ impl App {
 		match (req.uri().path(), req.method(), authn) {
 			("/sse", _, _) => {
 				// Assume this is streamable HTTP otherwise
+				let guard_registry_clone = guard_registry.clone();
 				let sse = LegacySSEService::new(
 					move || {
 						Relay::new(
 							backends.clone(),
 							authorization_policies.clone(),
 							client.clone(),
+							guard_registry_clone.clone(),
 						)
 						.map_err(|e| Error::new(e.to_string()))
 					},
@@ -268,6 +272,7 @@ impl App {
 							backends.clone(),
 							authorization_policies.clone(),
 							client.clone(),
+							guard_registry.clone(),
 						)
 						.map_err(|e| Error::new(e.to_string()))
 					},
@@ -289,6 +294,8 @@ impl App {
 
 #[derive(Debug, Clone)]
 pub struct McpBackendGroup {
+	/// Backend group name (namespace/name) for registry key
+	pub name: String,
 	pub targets: Vec<Arc<McpTarget>>,
 	pub stateful: bool,
 	pub security_guards: Vec<crate::mcp::security::McpSecurityGuard>,

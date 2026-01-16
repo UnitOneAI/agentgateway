@@ -4,19 +4,18 @@
 // Expected latency: < 1ms per guard
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 mod tool_poisoning;
 mod rug_pull;
 mod tool_shadowing;
 mod server_whitelist;
-mod pii_detection;
+mod pii_guard;
 
 pub use tool_poisoning::{ToolPoisoningDetector, ToolPoisoningConfig};
-pub use rug_pull::{RugPullDetector, RugPullConfig};
+pub use rug_pull::{RugPullDetector, RugPullConfig, ChangeDetectionConfig};
 pub use tool_shadowing::{ToolShadowingDetector, ToolShadowingConfig};
 pub use server_whitelist::{ServerWhitelistChecker, ServerWhitelistConfig};
-pub use pii_detection::{PiiDetector, PiiDetectionConfig};
+pub use pii_guard::{PiiGuard, PiiGuardConfig, PiiType, PiiAction};
 
 use super::{GuardContext, GuardDecision, GuardResult};
 
@@ -37,6 +36,11 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            tool_name = %tool_name,
+            server = %context.server_name,
+            "NativeGuard::evaluate_tool_invoke called (default impl)"
+        );
         let _ = (tool_name, arguments, context);
         Ok(GuardDecision::Allow)
     }
@@ -48,6 +52,10 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            server = %context.server_name,
+            "NativeGuard::evaluate_request called (default impl)"
+        );
         let _ = (request, context);
         Ok(GuardDecision::Allow)
     }
@@ -59,8 +67,19 @@ pub trait NativeGuard: Send + Sync {
         context: &GuardContext,
     ) -> GuardResult {
         // Default: allow
+        tracing::info!(
+            server = %context.server_name,
+            "NativeGuard::evaluate_response called (default impl)"
+        );
         let _ = (response, context);
         Ok(GuardDecision::Allow)
+    }
+
+    /// Reset state for a server (called on session re-initialization)
+    /// Guards that track per-server state (like baselines) should clear it here.
+    fn reset_server(&self, server_name: &str) {
+        // Default: no-op (most guards are stateless)
+        let _ = server_name;
     }
 }
 
@@ -73,6 +92,7 @@ pub(crate) fn build_regex_set(patterns: &[String]) -> Result<Vec<Regex>, regex::
 }
 
 /// Helper: Check if text matches any pattern
+#[allow(dead_code)]
 pub(crate) fn matches_any(text: &str, patterns: &[Regex]) -> bool {
     patterns.iter().any(|p| p.is_match(text))
 }

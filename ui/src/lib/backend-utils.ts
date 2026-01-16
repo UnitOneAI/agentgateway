@@ -6,6 +6,13 @@ import {
   StreamHttpTarget,
   McpTarget,
   McpStatefulMode,
+  SecurityGuard,
+  SecurityGuardType,
+  GuardPhase,
+  FailureMode,
+  PiiType,
+  PiiAction,
+  ScanField,
 } from "@/lib/types";
 import { DEFAULT_BACKEND_FORM, BACKEND_TYPE_COLORS } from "./backend-constants";
 import { POLICY_TYPES, BACKEND_POLICY_KEYS } from "./policy-constants";
@@ -483,17 +490,83 @@ export const createMcpTarget = (target: any) => {
   }
 };
 
+/**
+ * Convert security guards from form state to config format
+ */
+export const convertSecurityGuardsToConfig = (guards: SecurityGuard[]): any[] => {
+  return guards.map((guard) => {
+    // Build base config
+    const config: any = {
+      id: guard.id,
+      type: guard.type,
+      enabled: guard.enabled,
+      priority: guard.priority,
+      timeout_ms: guard.timeout_ms,
+      failure_mode: guard.failure_mode,
+      runs_on: guard.runs_on,
+    };
+
+    if (guard.description) {
+      config.description = guard.description;
+    }
+
+    // Add type-specific fields
+    switch (guard.type) {
+      case "tool_poisoning":
+        config.strict_mode = guard.strict_mode;
+        if (guard.custom_patterns.length > 0) {
+          config.custom_patterns = guard.custom_patterns;
+        }
+        config.scan_fields = guard.scan_fields;
+        config.alert_threshold = guard.alert_threshold;
+        break;
+
+      case "rug_pull":
+        config.risk_threshold = guard.risk_threshold;
+        break;
+
+      case "tool_shadowing":
+        config.block_duplicates = guard.block_duplicates;
+        if (guard.protected_names.length > 0) {
+          config.protected_names = guard.protected_names;
+        }
+        break;
+
+      case "server_whitelist":
+        if (guard.allowed_servers.length > 0) {
+          config.allowed_servers = guard.allowed_servers;
+        }
+        config.detect_typosquats = guard.detect_typosquats;
+        config.similarity_threshold = guard.similarity_threshold;
+        break;
+
+      case "pii":
+        config.detect = guard.detect;
+        config.action = guard.action;
+        config.min_score = guard.min_score;
+        if (guard.rejection_message) {
+          config.rejection_message = guard.rejection_message;
+        }
+        break;
+    }
+
+    return config;
+  });
+};
+
 export const createMcpBackend = (form: typeof DEFAULT_BACKEND_FORM, weight: number): Backend => {
   const targets = form.mcpTargets.map(createMcpTarget);
-  return addWeightIfNeeded(
-    {
-      mcp: {
-        targets, // Flat structure for local config format
-        statefulMode: form.mcpStateful ? McpStatefulMode.STATEFUL : McpStatefulMode.STATELESS,
-      },
-    },
-    weight
-  );
+  const mcp: any = {
+    targets, // Flat structure for local config format
+    statefulMode: form.mcpStateful ? McpStatefulMode.STATEFUL : McpStatefulMode.STATELESS,
+  };
+
+  // Add security guards if configured
+  if (form.securityGuards && form.securityGuards.length > 0) {
+    mcp.securityGuards = convertSecurityGuardsToConfig(form.securityGuards);
+  }
+
+  return addWeightIfNeeded({ mcp }, weight);
 };
 
 export const createAiProviderConfig = (form: typeof DEFAULT_BACKEND_FORM) => {
@@ -627,6 +700,86 @@ export const parseUrl = (url: string): { host: string; port: string; path: strin
   }
 };
 
+/**
+ * Parse security guards from config format to form state
+ */
+export const parseSecurityGuardsFromConfig = (configGuards: any[]): SecurityGuard[] => {
+  if (!configGuards || !Array.isArray(configGuards)) return [];
+
+  return configGuards.map((config) => {
+    const baseGuard = {
+      id: config.id || "",
+      description: config.description || "",
+      enabled: config.enabled !== false,
+      priority: config.priority ?? 100,
+      timeout_ms: config.timeout_ms ?? 100,
+      failure_mode: (config.failure_mode || "fail_closed") as FailureMode,
+      runs_on: (config.runs_on || ["response"]) as GuardPhase[],
+    };
+
+    switch (config.type as SecurityGuardType) {
+      case "tool_poisoning":
+        return {
+          ...baseGuard,
+          type: "tool_poisoning" as const,
+          strict_mode: config.strict_mode !== false,
+          custom_patterns: config.custom_patterns || [],
+          scan_fields: (config.scan_fields || [
+            "name",
+            "description",
+            "input_schema",
+          ]) as ScanField[],
+          alert_threshold: config.alert_threshold ?? 1,
+        };
+
+      case "rug_pull":
+        return {
+          ...baseGuard,
+          type: "rug_pull" as const,
+          risk_threshold: config.risk_threshold ?? 5,
+        };
+
+      case "tool_shadowing":
+        return {
+          ...baseGuard,
+          type: "tool_shadowing" as const,
+          block_duplicates: config.block_duplicates !== false,
+          protected_names: config.protected_names || [],
+        };
+
+      case "server_whitelist":
+        return {
+          ...baseGuard,
+          type: "server_whitelist" as const,
+          allowed_servers: config.allowed_servers || [],
+          detect_typosquats: config.detect_typosquats !== false,
+          similarity_threshold: config.similarity_threshold ?? 0.85,
+        };
+
+      case "pii":
+        return {
+          ...baseGuard,
+          type: "pii" as const,
+          detect: (config.detect || ["email", "credit_card"]) as PiiType[],
+          action: (config.action || "mask") as PiiAction,
+          min_score: config.min_score ?? 0.3,
+          rejection_message: config.rejection_message || "",
+        };
+
+      default:
+        // Return as PII guard by default if type is unknown
+        return {
+          ...baseGuard,
+          type: "pii" as const,
+          detect: ["email"] as PiiType[],
+          action: "mask" as PiiAction,
+          min_score: 0.3,
+          rejection_message: "",
+        };
+    }
+  });
+};
+
 // Populate form from backend for editing
 export const populateFormFromBackend = (
   backend: Backend,
@@ -726,6 +879,8 @@ export const populateFormFromBackend = (
       return baseTarget;
     }),
     mcpStateful: backend.mcp?.statefulMode !== McpStatefulMode.STATELESS, // Default to stateful if not specified
+    // Security guards
+    securityGuards: parseSecurityGuardsFromConfig((backend.mcp as any)?.securityGuards),
     // AI backend
     aiProvider:
       (getAiProviderType(backend) as

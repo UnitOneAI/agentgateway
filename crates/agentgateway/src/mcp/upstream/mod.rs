@@ -83,6 +83,8 @@ pub enum UpstreamError {
 	Send,
 	#[error("upstream closed on receive")]
 	Recv,
+	#[error("security guard rejected: {code} - {message}")]
+	SecurityGuard { code: String, message: String },
 }
 
 // UpstreamTarget defines a source for MCP information.

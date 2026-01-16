@@ -372,8 +372,7 @@ impl LocalBackend {
 						McpPrefixMode::Always => true,
 						McpPrefixMode::Conditional => false,
 					}),
-				security_guards: tgt.security_guards.clone(),
-				};
+				security_guards: tgt.security_guards.clone(),				};
 				backends.push(Backend::MCP(name, m).into());
 				backends
 			},

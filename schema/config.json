@@ -5564,6 +5564,237 @@
                                         "conditional",
                                         null
                                       ]
+                                    },
+                                    "securityGuards": {
+                                      "type": "array",
+                                      "items": {
+                                        "description": "Security guard that can be applied to MCP protocol operations",
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "description": "Unique identifier for this guard",
+                                            "type": "string"
+                                          },
+                                          "description": {
+                                            "description": "Human-readable description",
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "priority": {
+                                            "description": "Execution priority (lower = runs first)",
+                                            "type": "integer",
+                                            "format": "uint32",
+                                            "minimum": 0,
+                                            "default": 100
+                                          },
+                                          "failure_mode": {
+                                            "description": "Behavior when guard fails to execute",
+                                            "oneOf": [
+                                              {
+                                                "description": "Block request on failure (secure default)",
+                                                "type": "string",
+                                                "const": "fail_closed"
+                                              },
+                                              {
+                                                "description": "Allow request on failure (availability over security)",
+                                                "type": "string",
+                                                "const": "fail_open"
+                                              }
+                                            ],
+                                            "default": "fail_closed"
+                                          },
+                                          "timeout_ms": {
+                                            "description": "Maximum time allowed for guard execution",
+                                            "type": "integer",
+                                            "format": "uint64",
+                                            "minimum": 0,
+                                            "default": 100
+                                          },
+                                          "runs_on": {
+                                            "description": "Which phases this guard runs on",
+                                            "type": "array",
+                                            "items": {
+                                              "description": "Execution phase for guards",
+                                              "oneOf": [
+                                                {
+                                                  "description": "Before forwarding client request to MCP server",
+                                                  "type": "string",
+                                                  "const": "request"
+                                                },
+                                                {
+                                                  "description": "After receiving response from MCP server",
+                                                  "type": "string",
+                                                  "const": "response"
+                                                },
+                                                {
+                                                  "description": "Specifically for tools/list responses",
+                                                  "type": "string",
+                                                  "const": "tools_list"
+                                                },
+                                                {
+                                                  "description": "Specifically for tool invocations (tools/call)",
+                                                  "type": "string",
+                                                  "const": "tool_invoke"
+                                                }
+                                              ]
+                                            },
+                                            "default": []
+                                          },
+                                          "enabled": {
+                                            "description": "Whether guard is enabled",
+                                            "type": "boolean",
+                                            "default": true
+                                          }
+                                        },
+                                        "required": [
+                                          "id"
+                                        ],
+                                        "oneOf": [
+                                          {
+                                            "description": "Tool Poisoning Detection (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "strict_mode": {
+                                                "description": "Enable strict mode (blocks on any suspicious pattern)",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "custom_patterns": {
+                                                "description": "Custom regex patterns to detect (in addition to built-in patterns)",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": []
+                                              },
+                                              "scan_fields": {
+                                                "description": "Fields to scan in tool metadata",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "name",
+                                                    "description",
+                                                    "input_schema"
+                                                  ]
+                                                },
+                                                "default": [
+                                                  "name",
+                                                  "description",
+                                                  "input_schema"
+                                                ]
+                                              },
+                                              "alert_threshold": {
+                                                "description": "Minimum number of pattern matches to trigger alert",
+                                                "type": "integer",
+                                                "format": "uint",
+                                                "minimum": 0,
+                                                "default": 1
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "tool_poisoning"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Rug Pull Detection (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "enabled": {
+                                                "description": "Enable baseline tracking",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "risk_threshold": {
+                                                "description": "Risk threshold for alerting",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 5
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "rug_pull"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Tool Shadowing Prevention (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "block_duplicates": {
+                                                "description": "Block duplicate tool names across servers",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "protected_names": {
+                                                "description": "Protected MCP protocol method names",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": [
+                                                  "initialize",
+                                                  "tools/list",
+                                                  "tools/call",
+                                                  "prompts/list",
+                                                  "prompts/get",
+                                                  "resources/list",
+                                                  "resources/read"
+                                                ]
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "tool_shadowing"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Server Whitelist Enforcement (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "allowed_servers": {
+                                                "description": "List of allowed server names/IDs",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": []
+                                              },
+                                              "detect_typosquats": {
+                                                "description": "Detect typosquatting attempts",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "similarity_threshold": {
+                                                "description": "Similarity threshold for typo detection (0.0-1.0)",
+                                                "type": "number",
+                                                "format": "float",
+                                                "default": 0.8500000238418579
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "server_whitelist"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          }
+                                        ]
+                                      }
                                     }
                                   },
                                   "additionalProperties": false,
