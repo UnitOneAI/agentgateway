@@ -17,12 +17,13 @@ use http_body::{Body, Frame, SizeHint};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use tracing::{Level, trace};
 
 use crate::cel::{ContextBuilder, Expression};
-use crate::llm::LLMInfo;
+use crate::llm::{InputFormat, LLMInfo};
 use crate::proxy::ProxyResponseReason;
 use crate::telemetry::metrics::{
 	GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
@@ -145,7 +146,11 @@ impl<V: Serialize> Serialize for OrderedStringMap<V> {
 	where
 		S: Serializer,
 	{
-		self.map.serialize(serializer)
+		let mut m = serializer.serialize_map(Some(self.len()))?;
+		for (k, v) in self.iter() {
+			m.serialize_entry(k.as_ref(), v)?;
+		}
+		m.end()
 	}
 }
 
@@ -156,6 +161,17 @@ impl<'de, V: DeserializeOwned> Deserialize<'de> for OrderedStringMap<V> {
 	{
 		let im = IndexMap::<String, V>::deserialize(deserializer)?;
 		Ok(OrderedStringMap::from_iter(im))
+	}
+}
+
+#[cfg(feature = "schema")]
+impl<V: schemars::JsonSchema> schemars::JsonSchema for OrderedStringMap<V> {
+	fn schema_name() -> std::borrow::Cow<'static, str> {
+		format!("OrderedStringMap_{}", V::schema_name()).into()
+	}
+
+	fn json_schema(schema_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+		<std::collections::BTreeMap<String, V>>::json_schema(schema_gen)
 	}
 }
 
@@ -391,6 +407,9 @@ impl DropOnLog {
 	pub fn as_mut(&mut self) -> Option<&mut RequestLog> {
 		self.log.as_mut()
 	}
+	pub fn as_ref(&self) -> Option<&RequestLog> {
+		self.log.as_ref()
+	}
 	pub fn with(&mut self, f: impl FnOnce(&mut RequestLog)) {
 		if let Some(l) = self.log.as_mut() {
 			f(l)
@@ -527,7 +546,7 @@ pub struct RequestLog {
 	pub tls_info: Option<TLSConnectionInfo>,
 
 	// Set only if the trace is sampled
-	pub tracer: Option<trc::Tracer>,
+	pub tracer: Option<std::sync::Arc<trc::Tracer>>,
 
 	pub endpoint: Option<Target>,
 
@@ -815,7 +834,13 @@ impl Drop for DropOnLog {
 			// OpenTelemetry Gen AI Semantic Conventions v1.37.0
 			(
 				"gen_ai.operation.name",
-				log.llm_request.as_ref().map(|_| "chat".into()),
+				log.llm_request.as_ref().map(|r| {
+					if r.input_format == InputFormat::Embeddings {
+						"embeddings".into()
+					} else {
+						"chat".into()
+					}
+				}),
 			),
 			(
 				"gen_ai.provider.name",
@@ -846,6 +871,21 @@ impl Drop for DropOnLog {
 					.as_ref()
 					.and_then(|l| l.params.temperature)
 					.map(Into::into),
+			),
+			(
+				"gen_ai.embeddings.dimension.count",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.dimensions)
+					.map(Into::into),
+			),
+			(
+				"gen_ai.request.encoding_formats",
+				log
+					.llm_request
+					.as_ref()
+					.and_then(|l| l.params.encoding_format.display()),
 			),
 			(
 				"gen_ai.request.top_p",

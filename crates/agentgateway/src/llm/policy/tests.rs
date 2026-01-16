@@ -224,10 +224,14 @@ fn test_resolve_route() {
 		strng::literal!("/v1/messages"),
 		crate::llm::RouteType::Messages,
 	);
+	routes.insert(
+		strng::literal!("/v1/embeddings"),
+		crate::llm::RouteType::Embeddings,
+	);
 	routes.insert(strng::literal!("*"), crate::llm::RouteType::Passthrough);
 
 	let policy = Policy {
-		routes,
+		routes: SortedRoutes::from_iter(routes.into_iter().map(|(k, v)| (strng::new(k), v))),
 		..Default::default()
 	};
 
@@ -244,6 +248,11 @@ fn test_resolve_route() {
 	assert_eq!(
 		policy.resolve_route("/v1/messages"),
 		crate::llm::RouteType::Messages
+	);
+	// Embeddings route
+	assert_eq!(
+		policy.resolve_route("/v1/embeddings"),
+		crate::llm::RouteType::Embeddings
 	);
 	// Wildcard fallback
 	assert_eq!(

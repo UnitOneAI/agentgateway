@@ -108,6 +108,10 @@ pub enum RouteType {
 	Passthrough,
 	/// OpenAI /responses
 	Responses,
+	/// OpenAI /embeddings
+	Embeddings,
+	/// OpenAI /realtime (websockets)
+	Realtime,
 	/// Anthropic /v1/messages/count_tokens
 	AnthropicTokenCount,
 }
@@ -142,6 +146,8 @@ pub enum InputFormat {
 	Completions,
 	Messages,
 	Responses,
+	Embeddings,
+	Realtime,
 	CountTokens,
 }
 
@@ -151,6 +157,8 @@ impl InputFormat {
 			InputFormat::Completions => true,
 			InputFormat::Messages => true,
 			InputFormat::Responses => true,
+			InputFormat::Realtime => false,
+			InputFormat::Embeddings => false,
 			InputFormat::CountTokens => false,
 		}
 	}
@@ -171,6 +179,11 @@ pub struct LLMRequestParams {
 	pub seed: Option<i64>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_tokens: Option<u64>,
+	// Embeddings
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub encoding_format: Option<Strng>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub dimensions: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +290,19 @@ impl AIProvider {
 		Ok(())
 	}
 
+	fn set_path_and_query(uri: &mut http::uri::Parts, path: &'static str) -> anyhow::Result<()> {
+		let query = uri.path_and_query.as_ref().and_then(|p| p.query());
+		if let Some(query) = query {
+			uri.path_and_query = Some(PathAndQuery::from_maybe_shared(format!(
+				"{}?{}",
+				path, query
+			))?);
+		} else {
+			uri.path_and_query = Some(PathAndQuery::from_static(path));
+		};
+		Ok(())
+	}
+
 	pub fn set_host_path_defaults(
 		&self,
 		req: &mut Request,
@@ -288,7 +314,7 @@ impl AIProvider {
 			AIProvider::OpenAI(_) => http::modify_req(req, |req| {
 				http::modify_uri(req, |uri| {
 					if override_path {
-						uri.path_and_query = Some(PathAndQuery::from_static(openai::path(route_type)));
+						Self::set_path_and_query(uri, openai::path(route_type))?;
 					}
 					uri.authority = Some(Authority::from_static(openai::DEFAULT_HOST_STR));
 					Ok(())
@@ -298,7 +324,7 @@ impl AIProvider {
 			AIProvider::Anthropic(_) => http::modify_req(req, |req| {
 				http::modify_uri(req, |uri| {
 					if override_path {
-						uri.path_and_query = Some(PathAndQuery::from_static(anthropic::DEFAULT_PATH));
+						Self::set_path_and_query(uri, anthropic::DEFAULT_PATH)?;
 					}
 					uri.authority = Some(Authority::from_static(anthropic::DEFAULT_HOST_STR));
 					Ok(())
@@ -308,7 +334,7 @@ impl AIProvider {
 			AIProvider::Gemini(_) => http::modify_req(req, |req| {
 				http::modify_uri(req, |uri| {
 					if override_path {
-						uri.path_and_query = Some(PathAndQuery::from_static(gemini::DEFAULT_PATH));
+						Self::set_path_and_query(uri, gemini::DEFAULT_PATH)?;
 					}
 					uri.authority = Some(Authority::from_static(gemini::DEFAULT_HOST_STR));
 					Ok(())
@@ -318,7 +344,7 @@ impl AIProvider {
 			AIProvider::Vertex(provider) => {
 				let request_model = llm_request.map(|l| l.request_model.as_str());
 				let streaming = llm_request.map(|l| l.streaming).unwrap_or(false);
-				let path = provider.get_path_for_model(request_model, streaming);
+				let path = provider.get_path_for_model(route_type, request_model, streaming);
 				http::modify_req(req, |req| {
 					http::modify_uri(req, |uri| {
 						uri.path_and_query = Some(PathAndQuery::from_str(&path)?);
@@ -349,7 +375,7 @@ impl AIProvider {
 			AIProvider::AzureOpenAI(provider) => http::modify_req(req, |req| {
 				http::modify_uri(req, |uri| {
 					if override_path && let Some(l) = llm_request {
-						let path = provider.get_path_for_model(l.request_model.as_str());
+						let path = provider.get_path_for_model(route_type, l.request_model.as_str());
 						uri.path_and_query = Some(PathAndQuery::from_str(&path)?);
 					}
 					uri.authority = Some(Authority::from_str(&provider.get_host())?);
@@ -444,6 +470,31 @@ impl AIProvider {
 			.await
 	}
 
+	pub async fn process_embeddings_request(
+		&self,
+		backend_info: &crate::http::auth::BackendInfo,
+		policies: Option<&Policy>,
+		req: Request,
+		tokenize: bool,
+		log: &mut Option<&mut RequestLog>,
+	) -> Result<RequestResult, AIError> {
+		let (parts, req) = self
+			.read_body_and_default_model::<types::embeddings::Request>(policies, req)
+			.await?;
+
+		self
+			.process_request(
+				backend_info,
+				policies,
+				InputFormat::Embeddings,
+				req,
+				parts,
+				tokenize,
+				log,
+			)
+			.await
+	}
+
 	pub async fn process_responses_request(
 		&self,
 		backend_info: &crate::http::auth::BackendInfo,
@@ -528,6 +579,9 @@ impl AIProvider {
 			},
 			(InputFormat::CountTokens, AIProvider::Bedrock(_)) => {
 				// Bedrock supports count_tokens input via translation
+			},
+			(InputFormat::Embeddings, AIProvider::OpenAI(_) | AIProvider::AzureOpenAI(_)) => {
+				// passthrough
 			},
 			(m, p) => {
 				// Messages with OpenAI compatible: currently only supports translating the request
@@ -637,6 +691,14 @@ impl AIProvider {
 			log.store(Some(llm_info));
 			return Ok(resp);
 		}
+		// embeddings has simplified response handling (currently nothing; no translation needed)
+		if req.input_format == InputFormat::Embeddings {
+			let resp = Response::from_parts(parts, bytes.into());
+			let llm_resp = LLMResponse::default();
+			let llm_info = LLMInfo::new(req, llm_resp);
+			log.store(Some(llm_info));
+			return Ok(resp);
+		}
 
 		let (llm_resp, body) = if !parts.status.is_success() {
 			let body = self.process_error(&req, &bytes)?;
@@ -736,8 +798,14 @@ impl AIProvider {
 			(_, InputFormat::Responses) => Err(AIError::UnsupportedConversion(strng::literal!(
 				"this provider does not support Responses"
 			))),
+			(_, InputFormat::Realtime) => Err(AIError::UnsupportedConversion(strng::literal!(
+				"realtime does not use this codepath"
+			))),
 			(_, InputFormat::CountTokens) => {
 				unreachable!("CountTokens should be handled by process_count_tokens_response")
+			},
+			(_, InputFormat::Embeddings) => {
+				unreachable!("Embeddings should be handled by process_embeddings_response")
 			},
 		}
 	}
@@ -781,11 +849,7 @@ impl AIProvider {
 				| AIProvider::AzureOpenAI(_)
 				| AIProvider::Vertex(_),
 				InputFormat::Responses,
-			) => {
-				return Err(AIError::UnsupportedConversion(strng::literal!(
-					"Responses streaming not implemented"
-				)));
-			},
+			) => resp.map(|b| conversion::responses::passthrough_stream(b, buffer, log)),
 			// Anthropic messages: passthrough
 			(AIProvider::Anthropic(_), InputFormat::Messages) => {
 				resp.map(|b| conversion::messages::passthrough_stream(b, buffer, log))
@@ -817,6 +881,11 @@ impl AIProvider {
 					"this provider does not support Messages for streaming"
 				)));
 			},
+			(_, InputFormat::Realtime) => {
+				return Err(AIError::UnsupportedConversion(strng::literal!(
+					"realtime does not use streaming codepath"
+				)));
+			},
 			(AIProvider::Anthropic(_), InputFormat::Responses) => {
 				return Err(AIError::UnsupportedConversion(strng::literal!(
 					"this provider does not support Responses for streaming"
@@ -824,6 +893,9 @@ impl AIProvider {
 			},
 			(_, InputFormat::CountTokens) => {
 				unreachable!("CountTokens should be handled by process_count_tokens_response")
+			},
+			(_, InputFormat::Embeddings) => {
+				unreachable!("Embeddings should be handled by process_embeddings_response")
 			},
 		})
 	}
@@ -855,7 +927,10 @@ impl AIProvider {
 	fn process_error(&self, req: &LLMRequest, bytes: &Bytes) -> Result<Bytes, AIError> {
 		match (self, req.input_format) {
 			(
-				AIProvider::OpenAI(_) | AIProvider::Gemini(_) | AIProvider::AzureOpenAI(_),
+				AIProvider::OpenAI(_)
+				| AIProvider::Gemini(_)
+				| AIProvider::AzureOpenAI(_)
+				| AIProvider::Vertex(_),
 				InputFormat::Completions | InputFormat::Responses,
 			) => {
 				// Passthrough; nothing needed
@@ -952,10 +1027,12 @@ fn num_tokens_from_anthropic_messages(
 
 fn num_tokens_from_responses_input(
 	model: &str,
-	input: &openai::responses::Input,
+	input: &types::responses::typed::InputParam,
 ) -> Result<u64, AIError> {
-	use openai::responses::{ContentType, Input, InputContent, InputItem};
 	use tiktoken_rs::tokenizer::get_tokenizer;
+	use types::responses::typed::{
+		EasyInputContent, InputContent, InputItem, InputParam, Item, MessageItem, OutputMessageContent,
+	};
 
 	let tokenizer = get_tokenizer(model).unwrap_or(Tokenizer::Cl100kBase);
 	if tokenizer != Tokenizer::Cl100kBase && tokenizer != Tokenizer::O200kBase {
@@ -969,28 +1046,46 @@ fn num_tokens_from_responses_input(
 	let mut num_tokens: u64 = 0;
 
 	match input {
-		Input::Text(text) => {
+		InputParam::Text(text) => {
 			num_tokens += tokens_per_message;
 			num_tokens += 1; // role
 			num_tokens += bpe.encode_with_special_tokens(text).len() as u64;
 		},
-		Input::Items(items) => {
+		InputParam::Items(items) => {
 			for item in items {
 				match item {
-					InputItem::Message(msg) => {
+					InputItem::EasyMessage(msg) => {
 						num_tokens += tokens_per_message;
 						num_tokens += 1; // role
 						match &msg.content {
-							InputContent::TextInput(text) => {
+							EasyInputContent::Text(text) => {
 								num_tokens += bpe.encode_with_special_tokens(text).len() as u64;
 							},
-							InputContent::InputItemContentList(parts) => {
+							EasyInputContent::ContentList(parts) => {
 								for part in parts {
-									if let ContentType::InputText(input_text) = part {
+									if let InputContent::InputText(input_text) = part {
 										num_tokens += bpe.encode_with_special_tokens(&input_text.text).len() as u64;
 									}
 								}
 							},
+						}
+					},
+					InputItem::Item(Item::Message(MessageItem::Input(msg))) => {
+						num_tokens += tokens_per_message;
+						num_tokens += 1; // role
+						for part in &msg.content {
+							if let InputContent::InputText(input_text) = part {
+								num_tokens += bpe.encode_with_special_tokens(&input_text.text).len() as u64;
+							}
+						}
+					},
+					InputItem::Item(Item::Message(MessageItem::Output(msg))) => {
+						num_tokens += tokens_per_message;
+						num_tokens += 1; // role
+						for part in &msg.content {
+							if let OutputMessageContent::OutputText(output_text) = part {
+								num_tokens += bpe.encode_with_special_tokens(&output_text.text).len() as u64;
+							}
 						}
 					},
 					_ => {
@@ -1015,6 +1110,7 @@ pub fn preload_tokenizers() {
 
 pub fn get_bpe_from_tokenizer<'a>(tokenizer: Tokenizer) -> &'a CoreBPE {
 	match tokenizer {
+		Tokenizer::O200kHarmony => tiktoken_rs::o200k_harmony_singleton(),
 		Tokenizer::O200kBase => tiktoken_rs::o200k_base_singleton(),
 		Tokenizer::Cl100kBase => tiktoken_rs::cl100k_base_singleton(),
 		Tokenizer::R50kBase => tiktoken_rs::r50k_base_singleton(),

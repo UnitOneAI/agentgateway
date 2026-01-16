@@ -19,13 +19,13 @@ use types::discovery::*;
 use crate::client::Transport;
 use crate::http::backendtls::BackendTLS;
 use crate::http::ext_proc::ExtProcRequest;
-use crate::http::filters::AutoHostname;
+use crate::http::filters::{AutoHostname, BackendRequestTimeout};
 use crate::http::transformation_cel::Transformation;
 use crate::http::{
 	Authority, HeaderName, HeaderValue, PolicyResponse, Request, Response, Scheme, StatusCode, Uri,
 	auth, filters, get_host, merge_in_headers, retry,
 };
-use crate::llm::{LLMRequest, RequestResult, RouteType};
+use crate::llm::{InputFormat, LLMRequest, RequestResult, RouteType};
 use crate::proxy::{ProxyError, ProxyResponse, ProxyResponseReason, resolve_simple_backend};
 use crate::store::{
 	BackendPolicies, FrontendPolices, GatewayPolicies, LLMRequestPolicies, LLMResponsePolicies,
@@ -434,7 +434,7 @@ impl HTTPProxy {
 			}
 		}
 
-		let resp = match response_policies
+		let mut resp = match response_policies
 			.apply(
 				&mut resp,
 				log.as_mut().unwrap(),
@@ -457,8 +457,18 @@ impl HTTPProxy {
 			l.retry_after = http::outlierdetection::retry_after(resp.status(), resp.headers());
 		});
 
-		resp.map(move |b| http::Body::new(LogBody::new(b, log)))
+		if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
+			let Some(req_upgrade) = resp.extensions_mut().remove::<RequestUpgrade>() else {
+				return ProxyError::UpgradeFailed(None, None).into_response();
+			};
+			handle_upgrade(req_upgrade, resp, log)
+				.await
+				.unwrap_or_else(|e| e.into_response())
+		} else {
+			resp.map(move |b| http::Body::new(LogBody::new(b, log)))
+		}
 	}
+
 	async fn proxy_internal(
 		&self,
 		connection: Arc<Extension>,
@@ -472,10 +482,7 @@ impl HTTPProxy {
 		let inputs = self.inputs.clone();
 		let bind_name = self.bind_name.clone();
 		debug!(bind=%bind_name, "route for bind");
-		let Some(listeners) = ({
-			let state = inputs.stores.read_binds();
-			state.listeners(bind_name.clone())
-		}) else {
+		let Some(bind) = inputs.stores.read_binds().bind(&bind_name) else {
 			return Err(ProxyError::BindNotFound.into());
 		};
 
@@ -500,10 +507,53 @@ impl HTTPProxy {
 		// Record request now. We may do it later as well, after we have more expressions registered.
 		Self::apply_request_to_cel(log, &mut req).await;
 
+		// Check for per-frontend sampling overrides first, before we decide sampling
+		let frontend_policies = inputs
+			.stores
+			.read_binds()
+			.frontend_policies(self.inputs.cfg.gateway_ref());
+		if let Some(tp) = frontend_policies.tracing.as_deref() {
+			// Apply sampling overrides if present
+			if let Some(rs) = &tp.config.random_sampling {
+				log.cel.tracing_sampler.random_sampling = Some(rs.clone());
+				log.cel.cel_context.register_expression(rs.as_ref());
+			}
+			if let Some(cs) = &tp.config.client_sampling {
+				log.cel.tracing_sampler.client_sampling = Some(cs.clone());
+				log.cel.cel_context.register_expression(cs.as_ref());
+			}
+			// Re-apply request so any newly required attributes are captured before sampling
+			Self::apply_request_to_cel(log, &mut req).await;
+		}
+
 		let trace_parent = trc::TraceParent::from_request(&req);
 		let trace_sampled = log.trace_sampled(trace_parent.as_ref());
+
+		// Use dynamic tracer from frontend policy if available, otherwise use static tracer
 		if trace_sampled {
-			log.tracer = self.inputs.tracer.clone();
+			log.tracer = if let Some(tp) = frontend_policies.tracing.as_deref() {
+				debug!(
+					resources_count=%tp.config.resources.len(),
+					attrs_count=%tp.config.attributes.len(),
+					"Using dynamic tracer from frontend policy"
+				);
+
+				tp.get_or_init(self.policy_client())
+					.map(|t| Some(t.clone()))
+					.unwrap_or_else(|e| {
+						debug!("failed to initialize dynamic tracer, falling back to static tracer: {e:?}");
+						self.inputs.tracer.clone()
+					})
+			} else {
+				debug!("No frontend tracing policy found, using static tracer");
+				self.inputs.tracer.clone()
+			};
+			// Register CEL expressions from the tracer
+			if let Some(tracer) = &log.tracer {
+				log.cel.register(tracer.fields.as_ref());
+			}
+
+			// Now create outgoing span with the correct tracer already set
 			let ns = match trace_parent {
 				Some(tp) => {
 					// Build a new span off the existing trace
@@ -523,12 +573,9 @@ impl HTTPProxy {
 			log.outgoing_span = Some(ns);
 		}
 
-		if let Some(tracer) = &log.tracer {
-			log.cel.register(&tracer.fields);
-		}
-
+		// Now check if we actually have a listener - fail after tracing is set up
 		let selected_listener = selected_listener
-			.or_else(|| listeners.best_match(&host))
+			.or_else(|| bind.listeners.best_match(&host))
 			.ok_or(ProxyError::ListenerNotFound)?;
 		log.bind_name = Some(bind_name.clone());
 		log.listener_name = Some(selected_listener.name.clone());
@@ -537,7 +584,7 @@ impl HTTPProxy {
 		let mut gateway_policies = inputs
 			.stores
 			.read_binds()
-			.gateway_policies(selected_listener.name.clone());
+			.gateway_policies(&selected_listener.name);
 		gateway_policies.register_cel_expressions(log.cel.ctx());
 		// This is unfortunate but we record the request twice possibly; we want to record it as early as possible
 		// (for logging, etc) and also after we register the expressions since new fields may be available.
@@ -558,12 +605,14 @@ impl HTTPProxy {
 		)
 		.await?;
 
+		Self::detect_misdirected(log, bind, &req, &selected_listener)?;
+
 		let (selected_route, path_match) = http::route::select_best_route(
 			inputs.stores.clone(),
 			inputs.cfg.network.clone(),
 			inputs.cfg.self_addr.clone(),
 			self.target_address,
-			selected_listener.clone(),
+			&selected_listener,
 			&req,
 		)
 		.ok_or(ProxyError::RouteNotFound)?;
@@ -585,14 +634,14 @@ impl HTTPProxy {
 		debug!(bind=%bind_name, listener=%selected_listener.key, route=%selected_route.key, "selected route");
 
 		let route_path = RoutePath {
-			route: selected_route.name.clone(),
-			listener: selected_listener.name.clone(),
+			route: &selected_route.name,
+			listener: &selected_listener.name,
 		};
 
 		let mut route_policies = inputs
 			.stores
 			.read_binds()
-			.route_policies(route_path.clone(), &selected_route.inline_policies);
+			.route_policies(&route_path, &selected_route.inline_policies);
 		// Register all expressions
 		route_policies.register_cel_expressions(log.cel.ctx());
 		// This is unfortunate but we record the request twice possibly; we want to record it as early as possible
@@ -744,6 +793,52 @@ impl HTTPProxy {
 		unreachable!()
 	}
 
+	fn detect_misdirected(
+		log: &RequestLog,
+		bind: Arc<Bind>,
+		req: &Request,
+		selected_listener: &Arc<Listener>,
+	) -> Result<(), ProxyError> {
+		if log.tls_info.is_none() {
+			// Only applicable for HTTPS
+			return Ok(());
+		}
+		// From the spec:
+		// * If another Listener has an exact match or more specific wildcard entry,
+		//   the Gateway SHOULD return a 421.
+		// * If the current Listener (selected by SNI matching during ClientHello)
+		//   does not match the Host:
+		//     * If another Listener does match the Host, the Gateway SHOULD return a
+		//       421.
+		//     * If no other Listener matches the Host, the Gateway MUST return a
+		//       404.
+		let host = http::get_host(req).map_err(|_| ProxyError::RouteNotFound)?;
+		let new_best_listener = bind
+			.listeners
+			.best_match(host)
+			.filter(|l| l.key != selected_listener.key);
+
+		// "If another listener has a more specific match..."
+		if let Some(new_best) = new_best_listener {
+			debug!(
+				"misdirected, more specific match for {host} ({})",
+				new_best.key
+			);
+			return Err(ProxyError::MisdirectedRequest);
+		}
+		let host_matches_listener = selected_listener.matches(host);
+		// "If the current Listener does not match the host..."
+		if !host_matches_listener {
+			debug!(
+				"misdirected, host {host} no longer matches ({})",
+				selected_listener.key
+			);
+			Err(ProxyError::RouteNotFound)
+		} else {
+			Ok(())
+		}
+	}
+
 	async fn apply_request_to_cel(log: &mut RequestLog, req: &mut Request) {
 		log
 			.cel
@@ -756,6 +851,12 @@ impl HTTPProxy {
 		if let Some(claims) = req.extensions().get::<crate::http::jwt::Claims>() {
 			log.cel.ctx().with_jwt(claims);
 		}
+		if let Some(claims) = req.extensions().get::<crate::http::apikey::Claims>() {
+			log.cel.ctx().with_api_key(claims);
+		}
+		if let Some(claims) = req.extensions().get::<crate::http::basicauth::Claims>() {
+			log.cel.ctx().with_basic_auth(claims);
+		}
 	}
 
 	#[allow(clippy::too_many_arguments)]
@@ -767,8 +868,17 @@ impl HTTPProxy {
 		selected_backend: &RouteBackend,
 		backend_policies: BackendPolicies,
 		response_policies: &mut ResponsePolicies,
-		req: Request,
+		mut req: Request,
 	) -> Result<Response, ProxyResponse> {
+		if let Some(backend_timeout) = response_policies
+			.timeout
+			.as_ref()
+			.and_then(|t| t.backend_request_timeout)
+		{
+			req
+				.extensions_mut()
+				.insert(BackendRequestTimeout(backend_timeout));
+		}
 		let call = make_backend_call(
 			self.inputs.clone(),
 			route_policies.clone(),
@@ -783,7 +893,7 @@ impl HTTPProxy {
 		let timeout = response_policies
 			.timeout
 			.as_ref()
-			.and_then(|t| t.effective_timeout());
+			.and_then(|t| t.request_timeout);
 
 		// Setup timeout
 		let call_result = if let Some(timeout) = timeout {
@@ -795,7 +905,7 @@ impl HTTPProxy {
 		};
 
 		// Run the actual call
-		let resp = match call_result {
+		let mut resp = match call_result {
 			Ok(Ok(resp)) => resp,
 			Ok(Err(e)) => {
 				return Err(e.into());
@@ -805,7 +915,10 @@ impl HTTPProxy {
 			},
 		};
 		if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
-			return handle_upgrade(req_upgrade, resp).await.map_err(Into::into);
+			let Some(upgrade) = req_upgrade.take() else {
+				return Err(ProxyError::UpgradeFailed(None, None).into());
+			};
+			resp.extensions_mut().insert(upgrade);
 		}
 
 		// gRPC status can be in the initial headers or a trailer, add if they are here
@@ -831,20 +944,18 @@ fn resolve_backend(b: RouteBackendReference, pi: &ProxyInputs) -> Result<RouteBa
 }
 
 async fn handle_upgrade(
-	req_upgrade_type: &mut Option<RequestUpgrade>,
+	req_upgrade_type: RequestUpgrade,
 	mut resp: Response,
+	log: DropOnLog,
 ) -> Result<Response, ProxyError> {
-	let Some(RequestUpgrade {
-		upgade_type,
+	let RequestUpgrade {
+		upgrade_type,
 		upgrade,
-	}) = std::mem::take(req_upgrade_type)
-	else {
-		return Err(ProxyError::UpgradeFailed(None, None));
-	};
-	let resp_upgrade_type = upgrade_type(resp.headers());
-	if Some(&upgade_type) != resp_upgrade_type.as_ref() {
+	} = req_upgrade_type;
+	let resp_upgrade_type = get_upgrade_type(resp.headers());
+	if Some(&upgrade_type) != resp_upgrade_type.as_ref() {
 		return Err(ProxyError::UpgradeFailed(
-			Some(upgade_type),
+			Some(upgrade_type),
 			resp_upgrade_type,
 		));
 	}
@@ -862,12 +973,29 @@ async fn handle_upgrade(
 				return;
 			},
 		};
-		let _ = agent_core::copy::copy_bidirectional(
-			&mut TokioIo::new(req),
-			&mut TokioIo::new(response_upgraded),
-			&agent_core::copy::ConnectionResult {},
-		)
-		.await;
+		let mut server = TokioIo::new(response_upgraded);
+		if let Some(log) = log.as_ref()
+			&& let Some(llm_req) = log.llm_request.as_ref()
+			&& llm_req.input_format == InputFormat::Realtime
+		{
+			let llm = log.llm_response.clone();
+			let mut server = parse::websocket::parser(server, llm).await;
+			let _ = agent_core::copy::copy_bidirectional(
+				&mut TokioIo::new(req),
+				&mut server,
+				&agent_core::copy::ConnectionResult {},
+			)
+			.await;
+		} else {
+			let _ = agent_core::copy::copy_bidirectional(
+				&mut TokioIo::new(req),
+				&mut server,
+				&agent_core::copy::ConnectionResult {},
+			)
+			.await;
+		}
+		// Make sure we only emit log after we are done with the entire connection
+		drop(log);
 	});
 	Ok(resp)
 }
@@ -955,7 +1083,7 @@ fn get_backend_policies(
 	path: Option<RoutePath>,
 ) -> BackendPolicies {
 	inputs.stores.read_binds().backend_policies(
-		backend.backend.target(),
+		backend.backend.target_ref(),
 		// Precedence: Selector < Backend inline < backendRef inline
 		// Note this differs from the logical chain of objects (Route -> backendRef -> backend),
 		// because a backendRef is actually more specific: its one *specific usage* of the backend.
@@ -1027,10 +1155,10 @@ async fn make_backend_call(
 		Backend::AI(n, ai) => {
 			let (provider, handle) = ai.select_provider().ok_or(ProxyError::NoHealthyEndpoints)?;
 			log.add(move |l| l.request_handle = Some(handle));
-			let sub_backend_name = BackendTarget::Backend {
-				name: n.name.clone(),
-				namespace: n.namespace.clone(),
-				section: Some(provider.name.clone()),
+			let sub_backend_name = BackendTargetRef::Backend {
+				name: n.name.as_ref(),
+				namespace: n.namespace.as_ref(),
+				section: Some(provider.name.as_ref()),
 			};
 			let sub_backend_policies = inputs
 				.stores
@@ -1155,7 +1283,8 @@ async fn make_backend_call(
 				RouteType::Completions
 				| RouteType::Messages
 				| RouteType::Responses
-				| RouteType::AnthropicTokenCount => {
+				| RouteType::AnthropicTokenCount
+				| RouteType::Embeddings => {
 					let r = match route_type {
 						RouteType::Completions => llm
 							.provider
@@ -1182,6 +1311,17 @@ async fn make_backend_call(
 						RouteType::Responses => llm
 							.provider
 							.process_responses_request(
+								&backend_info,
+								llm_request_policies.llm.as_deref(),
+								req,
+								llm.tokenize,
+								&mut log,
+							)
+							.await
+							.map_err(|e| ProxyError::Processing(e.into()))?,
+						RouteType::Embeddings => llm
+							.provider
+							.process_embeddings_request(
 								&backend_info,
 								llm_request_policies.llm.as_deref(),
 								req,
@@ -1249,13 +1389,32 @@ async fn make_backend_call(
 						)
 					}));
 				},
-				RouteType::Passthrough => {
+				RouteType::Passthrough | RouteType::Realtime => {
 					// For passthrough, we only need to setup the response so we get default TLS, hostname, etc set.
 					// We do not need LLM policies nor token-based rate limits, etc.
+					// For realtime we do the same and handle everything in the Websocket handler
 					llm
 						.provider
 						.setup_request(&mut req, route_type, None, true)
 						.map_err(ProxyError::Processing)?;
+					if route_type == RouteType::Realtime {
+						let request_model = http::as_url(req.uri())
+							.map_err(ProxyError::Processing)?
+							.query_pairs()
+							.find(|(k, _v)| k == "model")
+							.map(|(_, v)| strng::new(v))
+							.unwrap_or_default();
+						log.add(|l| {
+							l.llm_request = Some(LLMRequest {
+								input_format: InputFormat::Realtime,
+								request_model,
+								streaming: true,
+								provider: llm.provider.provider(),
+								input_tokens: None,
+								params: Default::default(),
+							})
+						});
+					}
 					(req, LLMResponsePolicies::default(), None)
 				},
 			}
@@ -1486,8 +1645,9 @@ static HOP_HEADERS: [HeaderName; 9] = [
 	header::UPGRADE,
 ];
 
+#[derive(Clone)]
 struct RequestUpgrade {
-	upgade_type: HeaderValue,
+	upgrade_type: HeaderValue,
 	upgrade: OnUpgrade,
 }
 
@@ -1498,7 +1658,7 @@ fn hop_by_hop_headers(req: &mut Request) -> Option<RequestUpgrade> {
 		.and_then(|h| h.to_str().ok())
 		.map(|s| s.contains("trailers"))
 		.unwrap_or(false);
-	let upgrade_type = upgrade_type(req.headers());
+	let upgrade_type = get_upgrade_type(req.headers());
 	for h in HOP_HEADERS.iter() {
 		req.headers_mut().remove(h);
 	}
@@ -1519,7 +1679,7 @@ fn hop_by_hop_headers(req: &mut Request) -> Option<RequestUpgrade> {
 		&& let Some(u) = on_upgrade
 	{
 		Some(RequestUpgrade {
-			upgade_type: t,
+			upgrade_type: t,
 			upgrade: u,
 		})
 	} else {
@@ -1527,7 +1687,7 @@ fn hop_by_hop_headers(req: &mut Request) -> Option<RequestUpgrade> {
 	}
 }
 
-fn upgrade_type(headers: &HeaderMap) -> Option<HeaderValue> {
+fn get_upgrade_type(headers: &HeaderMap) -> Option<HeaderValue> {
 	if let Some(con) = headers.typed_get::<headers::Connection>() {
 		if con.contains(http::header::UPGRADE) {
 			headers.get(http::header::UPGRADE).cloned()
@@ -1557,12 +1717,11 @@ fn normalize_uri(connection: &Extension, req: &mut Request) -> anyhow::Result<()
 		let mut parts = std::mem::take(req.uri_mut()).into_parts();
 		// TODO: handle absolute HTTP/1.1 form
 		let host = req
-			.headers()
-			.get(http::header::HOST)
-			.and_then(|h| h.to_str().ok())
-			.and_then(|h| h.parse::<Authority>().ok())
+			.headers_mut()
+			.remove(http::header::HOST)
+			// TODO(https://github.com/hyperium/http/pull/811) actually make this shared
+			.and_then(|h| Authority::try_from(h.as_bytes()).ok())
 			.ok_or_else(|| anyhow::anyhow!("no authority or host"))?;
-		req.headers_mut().remove(http::header::HOST);
 
 		parts.authority = Some(host);
 		if parts.path_and_query.is_some() {

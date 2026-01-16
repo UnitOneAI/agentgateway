@@ -8,6 +8,7 @@ use frozen_collections::FzHashSet;
 use itertools::Itertools;
 use llm::{AIBackend, AIProvider, NamedAIProvider};
 use rustls::ServerConfig;
+use std::collections::HashMap;
 
 use super::agent::*;
 use crate::http::auth::{AwsAuth, BackendAuth};
@@ -48,7 +49,7 @@ impl From<&proto::agent::TlsConfig> for ServerTLSConfig {
 				scb.with_no_client_auth()
 			};
 			let mut sc = scb.with_single_cert(cert_chain, private_key)?;
-			// Defaults set here. These can be overriden by Frontend policy
+			// Defaults set here. These can be overridden by Frontend policy
 			// TODO: this default only makes sense for HTTPS, distinguish from TLS
 			sc.alpn_protocols = vec![b"h2".into(), b"http/1.1".into()];
 			Ok(sc)
@@ -114,6 +115,11 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 		m: &proto::agent::backend_policy_spec::McpAuthentication,
 	) -> Result<Self, Self::Error> {
 		let provider = match m.provider {
+			x if x
+				== proto::agent::backend_policy_spec::mcp_authentication::McpIdp::Unspecified as i32 =>
+			{
+				None
+			},
 			x if x == proto::agent::backend_policy_spec::mcp_authentication::McpIdp::Auth0 as i32 => {
 				Some(McpIDP::Auth0 {})
 			},
@@ -144,10 +150,21 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 				))
 			})?;
 
-		// Create JWT validator with Optional mode (default for MCP auth)
-		let jwt_validator =
-			http::jwt::Jwt::from_providers(vec![jwt_provider], http::jwt::Mode::Optional);
+		let mode = match proto::agent::backend_policy_spec::mcp_authentication::Mode::try_from(m.mode)
+			.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
+		{
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Optional => {
+				http::jwt::Mode::Optional
+			},
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Strict => {
+				http::jwt::Mode::Strict
+			},
+			proto::agent::backend_policy_spec::mcp_authentication::Mode::Permissive => {
+				http::jwt::Mode::Permissive
+			},
+		};
 
+		let jwt_validator = http::jwt::Jwt::from_providers(vec![jwt_provider], mode);
 		Ok(McpAuthentication {
 			issuer: m.issuer.clone(),
 			audiences: m.audiences.clone(),
@@ -169,6 +186,7 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 				ResourceMetadata { extra }
 			},
 			jwt_validator: std::sync::Arc::new(jwt_validator),
+			mode,
 		})
 	}
 }
@@ -183,6 +201,8 @@ fn convert_route_type(proto_rt: i32) -> llm::RouteType {
 		Ok(ProtoRT::Passthrough) => llm::RouteType::Passthrough,
 		Ok(ProtoRT::Responses) => llm::RouteType::Responses,
 		Ok(ProtoRT::AnthropicTokenCount) => llm::RouteType::AnthropicTokenCount,
+		Ok(ProtoRT::Embeddings) => llm::RouteType::Embeddings,
+		Ok(ProtoRT::Realtime) => llm::RouteType::Realtime,
 		Err(_) => {
 			warn!(
 				"Unknown proto RouteType value {}, defaulting to Completions",
@@ -417,6 +437,17 @@ impl TryFrom<&proto::agent::Bind> for Bind {
 			key: s.key.clone().into(),
 			address: SocketAddr::from((IpAddr::from([0, 0, 0, 0]), s.port as u16)),
 			listeners: Default::default(),
+			protocol: match proto::agent::bind::Protocol::try_from(s.protocol)? {
+				proto::agent::bind::Protocol::Http => BindProtocol::http,
+				proto::agent::bind::Protocol::Tcp => BindProtocol::tcp,
+				proto::agent::bind::Protocol::Tls => BindProtocol::tls,
+			},
+			tunnel_protocol: match proto::agent::bind::TunnelProtocol::try_from(s.tunnel_protocol)? {
+				proto::agent::bind::TunnelProtocol::Direct => TunnelProtocol::Direct,
+				proto::agent::bind::TunnelProtocol::HboneGateway => TunnelProtocol::HboneGateway,
+				proto::agent::bind::TunnelProtocol::HboneWaypoint => TunnelProtocol::HboneWaypoint,
+				proto::agent::bind::TunnelProtocol::Proxy => TunnelProtocol::Proxy,
+			},
 		})
 	}
 }
@@ -637,6 +668,7 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 						proto::agent::mcp_backend::PrefixMode::Always => true,
 						proto::agent::mcp_backend::PrefixMode::Conditional => false,
 					},
+					security_guards: vec![],
 				},
 			),
 			None => {
@@ -837,6 +869,7 @@ impl TryFrom<&proto::agent::BackendPolicySpec> for BackendPolicy {
 						HttpVersion::Http1 => Some(::http::Version::HTTP_11),
 						HttpVersion::Http2 => Some(::http::Version::HTTP_2),
 					},
+					request_timeout: bhttp.request_timeout.map(convert_duration),
 				})
 			},
 			Some(bps::Kind::BackendTcp(btcp)) => BackendPolicy::TCP(backend::TCP {
@@ -1202,6 +1235,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 					domain: rrl.domain.clone(),
 					target: Arc::new(target),
 					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
+					// Not supported over XDS; use a timeout on the backend itself
+					timeout: None,
 				})
 			},
 			Some(tps::Kind::Csrf(csrf_spec)) => {
@@ -1442,8 +1477,82 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 					remove: Arc::new(FzHashSet::new(rm)),
 				})
 			},
-			Some(fps::Kind::Tracing(_)) => FrontendPolicy::Tracing(()),
+			Some(fps::Kind::Tracing(t)) => {
+				// Convert protobuf to TracingConfig
+				let tracing_config = types::agent::TracingConfig::try_from(t)?;
+
+				// Prepare LoggingFields with the CEL attributes from TracingConfig
+				let logging_fields = Arc::new(crate::telemetry::log::LoggingFields {
+					remove: Arc::new(tracing_config.remove.iter().cloned().collect()),
+					add: Arc::new(tracing_config.attributes.clone()),
+				});
+
+				FrontendPolicy::Tracing(Arc::new(types::agent::TracingPolicy {
+					config: tracing_config,
+					fields: logging_fields,
+					tracer: once_cell::sync::OnceCell::new(),
+				}))
+			},
 			None => return Err(ProtoError::MissingRequiredField),
+		})
+	}
+}
+
+impl TryFrom<&proto::agent::frontend_policy_spec::Tracing> for types::agent::TracingConfig {
+	type Error = ProtoError;
+
+	fn try_from(t: &proto::agent::frontend_policy_spec::Tracing) -> Result<Self, Self::Error> {
+		let provider_backend = resolve_simple_reference(t.provider_backend.as_ref())?;
+
+		let attributes: OrderedStringMap<Arc<cel::Expression>> = t
+			.attributes
+			.iter()
+			.map(|a| {
+				let expr = cel::Expression::new_permissive(&a.value);
+				(a.name.clone(), Arc::new(expr))
+			})
+			.collect();
+
+		let resources: OrderedStringMap<Arc<cel::Expression>> = t
+			.resources
+			.iter()
+			.map(|a| {
+				let expr = cel::Expression::new_permissive(&a.value);
+				(a.name.clone(), Arc::new(expr))
+			})
+			.collect();
+
+		// Optional per-policy sampling overrides
+		let random_sampling = t
+			.random_sampling
+			.as_ref()
+			.map(|s| Arc::new(cel::Expression::new_permissive(s)));
+		let client_sampling = t
+			.client_sampling
+			.as_ref()
+			.map(|s| Arc::new(cel::Expression::new_permissive(s)));
+
+		let path = t.path.clone().unwrap_or_else(|| "/v1/traces".to_string());
+
+		let protocol =
+			match crate::types::proto::agent::frontend_policy_spec::tracing::Protocol::try_from(
+				t.protocol,
+			) {
+				Ok(crate::types::proto::agent::frontend_policy_spec::tracing::Protocol::Grpc) => {
+					types::agent::TracingProtocol::Grpc
+				},
+				_ => types::agent::TracingProtocol::Http,
+			};
+
+		Ok(types::agent::TracingConfig {
+			provider_backend,
+			attributes,
+			resources,
+			remove: t.remove.clone(),
+			random_sampling,
+			client_sampling,
+			path,
+			protocol,
 		})
 	}
 }
@@ -1663,6 +1772,9 @@ fn convert_regex_rules(
 							},
 							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::Email => {
 								llm::policy::Builtin::Email
+							},
+							proto::agent::backend_policy_spec::ai::BuiltinRegexRule::CaSin => {
+								llm::policy::Builtin::CaSin
 							},
 							_ => {
 								warn!(value = *b, "Unknown builtin regex rule, skipping");

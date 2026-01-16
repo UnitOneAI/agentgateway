@@ -10,7 +10,6 @@ use axum_extra::headers::authorization::Bearer;
 use bytes::Bytes;
 use http::Method;
 use http::uri::PathAndQuery;
-use rmcp::transport::StreamableHttpServerConfig;
 use tracing::{debug, warn};
 
 use crate::cel::ContextBuilder;
@@ -21,7 +20,7 @@ use crate::json::from_body_with_limit;
 use crate::mcp::handler::Relay;
 use crate::mcp::session::SessionManager;
 use crate::mcp::sse::LegacySSEService;
-use crate::mcp::streamablehttp::StreamableHttpService;
+use crate::mcp::streamablehttp::{StreamableHttpServerConfig, StreamableHttpService};
 use crate::mcp::{MCPInfo, McpAuthorizationSet};
 use crate::proxy::ProxyError;
 use crate::proxy::httpproxy::PolicyClient;
@@ -29,8 +28,8 @@ use crate::store::{BackendPolicies, Stores};
 use crate::telemetry::log::AsyncLog;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent::{
-	BackendTarget, McpAuthentication, McpBackend, McpIDP, McpTargetSpec, ResourceName, SimpleBackend,
-	SimpleBackendReference,
+	BackendTargetRef, McpAuthentication, McpBackend, McpIDP, McpTargetSpec, ResourceName,
+	SimpleBackend, SimpleBackendReference,
 };
 use crate::{ProxyInputs, json};
 
@@ -92,12 +91,14 @@ impl App {
 						.map(|b| crate::proxy::resolve_simple_backend_with_policies(b, &pi))
 						.transpose()?;
 					let inline_pols = be.as_ref().map(|pol| pol.inline_policies.as_slice());
-					let sub_backend_target = BackendTarget::Backend {
-						name: backend_group_name.name.clone(),
-						namespace: backend_group_name.namespace.clone(),
-						section: Some(t.name.clone()),
+					let sub_backend_target = BackendTargetRef::Backend {
+						name: backend_group_name.name.as_ref(),
+						namespace: backend_group_name.namespace.as_ref(),
+						section: Some(t.name.as_ref()),
 					};
-					let backend_policies = binds.sub_backend_policies(sub_backend_target, inline_pols);
+					let backend_policies = backend_policies
+						.clone()
+						.merge(binds.sub_backend_policies(sub_backend_target, inline_pols));
 					Ok::<_, ProxyError>(Arc::new(McpTarget {
 						name: t.name.clone(),
 						spec: t.spec.clone(),
@@ -115,10 +116,13 @@ impl App {
 			};
 
 			McpBackendGroup {
+				name: format!("{}/{}", backend_group_name.namespace, backend_group_name.name),
 				targets: nt,
 				stateful: backend.stateful,
+				security_guards: backend.security_guards.clone(),
 			}
 		};
+		let guard_registry = self.state.guard_registry.clone();
 		let sm = self.session.clone();
 		let client = PolicyClient { inputs: pi.clone() };
 		let authorization_policies = backend_policies
@@ -165,24 +169,42 @@ impl App {
 			match (authn.as_ref(), has_claims) {
 				// if mcp authn is configured, has a validator, and has no claims yet, validate
 				(Some(auth), false) => {
-					if let Ok(TypedHeader(Authorization(bearer))) = req
+					debug!(
+						"MCP auth configured; validating Authorization header (mode={:?})",
+						auth.mode
+					);
+					match req
 						.extract_parts::<TypedHeader<Authorization<Bearer>>>()
 						.await
 					{
-						match auth.jwt_validator.validate_claims(bearer.token()) {
-							Ok(claims) => {
-								// Populate context with verified JWT claims before continuing
-								ctx.with_jwt(&claims);
-								req.headers_mut().remove(http::header::AUTHORIZATION);
-								req.extensions_mut().insert(claims);
-							},
-							Err(_e) => {
-								debug!("JWT validation failed: {:?}", _e);
+						Ok(TypedHeader(Authorization(bearer))) => {
+							debug!("Authorization header present; validating JWT token");
+							match auth.jwt_validator.validate_claims(bearer.token()) {
+								Ok(claims) => {
+									debug!("JWT validation succeeded; inserting verified claims into context");
+									// Populate context with verified JWT claims before continuing
+									ctx.with_jwt(&claims);
+									req.headers_mut().remove(http::header::AUTHORIZATION);
+									req.extensions_mut().insert(claims);
+								},
+								Err(_e) => {
+									warn!("JWT validation failed; returning 401 (error: {:?})", _e);
+									return Self::create_auth_required_response(&req, auth).into_response();
+								},
+							}
+						},
+						Err(_missing_header) => {
+							// Enforce strict mode when Authorization header is missing
+							if matches!(auth.mode, jwt::Mode::Strict) {
+								debug!("Missing Authorization header and MCP auth is STRICT; returning 401");
 								return Self::create_auth_required_response(&req, auth).into_response();
-							},
-						}
+							}
+							// Optional/Permissive: continue without JWT
+							debug!(
+								"Missing Authorization header but MCP auth not STRICT; continuing without JWT"
+							);
+						},
 					}
-					// MCP authn validation happens in optional mode, so if no token is present, do nothing
 				},
 				// if mcp authn is configured but JWT already validated (claims exist from previous layer),
 				// reject because we cannot validate MCP-specific auth requirements
@@ -193,7 +215,11 @@ impl App {
 					return Self::create_auth_required_response(&req, auth).into_response();
 				},
 				// if no mcp authn is configured, do nothing
-				(None, _) => {},
+				(None, _) => {
+					debug!(
+						"No MCP authentication configured for backend; continuing without JWT enforcement"
+					);
+				},
 			}
 		}
 
@@ -203,12 +229,14 @@ impl App {
 		match (req.uri().path(), req.method(), authn) {
 			("/sse", _, _) => {
 				// Assume this is streamable HTTP otherwise
+				let guard_registry_clone = guard_registry.clone();
 				let sse = LegacySSEService::new(
 					move || {
 						Relay::new(
 							backends.clone(),
 							authorization_policies.clone(),
 							client.clone(),
+							guard_registry_clone.clone(),
 						)
 						.map_err(|e| Error::new(e.to_string()))
 					},
@@ -244,13 +272,13 @@ impl App {
 							backends.clone(),
 							authorization_policies.clone(),
 							client.clone(),
+							guard_registry.clone(),
 						)
 						.map_err(|e| Error::new(e.to_string()))
 					},
 					sm,
 					StreamableHttpServerConfig {
 						stateful_mode: backend.stateful,
-						..Default::default()
 					},
 				);
 				streamable.handle(req).await
@@ -266,8 +294,11 @@ impl App {
 
 #[derive(Debug, Clone)]
 pub struct McpBackendGroup {
+	/// Backend group name (namespace/name) for registry key
+	pub name: String,
 	pub targets: Vec<Arc<McpTarget>>,
 	pub stateful: bool,
+	pub security_guards: Vec<crate::mcp::security::McpSecurityGuard>,
 }
 
 #[derive(Debug)]

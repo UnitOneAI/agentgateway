@@ -236,6 +236,7 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		termination_min_deadline,
 		threading_mode,
 		backend: raw.backend,
+		admin_runtime_handle: None,
 		termination_max_deadline: match termination_max_deadline {
 			Some(period) => period,
 			None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
@@ -293,6 +294,11 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 				.map(cel::Expression::new_strict)
 				.transpose()?
 				.map(Arc::new),
+			path: raw
+				.tracing
+				.as_ref()
+				.and_then(|t| t.path.clone())
+				.unwrap_or_else(|| "/v1/traces".to_string()),
 		},
 		logging: telemetry::log::Config {
 			filter: raw
@@ -364,18 +370,18 @@ pub fn parse_config(contents: String, filename: Option<PathBuf>) -> anyhow::Resu
 		proxy_metadata: crate::ProxyMetadata {
 			instance_ip: std::env::var("INSTANCE_IP").unwrap_or_else(|_| "1.1.1.1".to_string()),
 			pod_name: std::env::var("POD_NAME").unwrap_or_else(|_| "".to_string()),
-			pod_namespace: std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "".to_string()),
+			pod_namespace: std::env::var("NAMESPACE").unwrap_or_else(|_| "".to_string()),
 			node_name: std::env::var("NODE_NAME").unwrap_or_else(|_| "".to_string()),
 			role: format!(
 				"{ns}~{name}",
-				ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "".to_string()),
+				ns = std::env::var("NAMESPACE").unwrap_or_else(|_| "".to_string()),
 				name = std::env::var("GATEWAY").unwrap_or_else(|_| "".to_string())
 			),
 			node_id: format!(
 				"agentgateway~{ip}~{pod_name}.{ns}~{ns}.svc.cluster.local",
 				ip = std::env::var("INSTANCE_IP").unwrap_or_else(|_| "1.1.1.1".to_string()),
 				pod_name = std::env::var("POD_NAME").unwrap_or_else(|_| "".to_string()),
-				ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "".to_string())
+				ns = std::env::var("NAMESPACE").unwrap_or_else(|_| "".to_string())
 			),
 		},
 		hbone: Arc::new(agent_hbone::Config {

@@ -18,8 +18,8 @@ use crate::mcp::McpAuthorizationSet;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::Event;
 use crate::types::agent::{
-	A2aPolicy, Backend, BackendKey, BackendPolicy, BackendTarget, BackendWithPolicies, Bind, BindKey,
-	FrontendPolicy, Listener, ListenerKey, ListenerName, ListenerSet, McpAuthentication, PolicyKey,
+	A2aPolicy, Backend, BackendKey, BackendPolicy, BackendTargetRef, BackendWithPolicies, Bind,
+	BindKey, FrontendPolicy, Listener, ListenerKey, ListenerName, McpAuthentication, PolicyKey,
 	PolicyTarget, Route, RouteKey, RouteName, TCPRoute, TargetedPolicy, TrafficPolicy,
 };
 use crate::types::proto::agent::resource::Kind as XdsKind;
@@ -46,7 +46,7 @@ pub struct Store {
 	resources: HashMap<Strng, ResourceKind>,
 
 	policies_by_key: HashMap<PolicyKey, Arc<TargetedPolicy>>,
-	policies_by_target: HashMap<PolicyTarget, HashSet<PolicyKey>>,
+	policies_by_target: hashbrown::HashMap<PolicyTarget, HashSet<PolicyKey>>,
 
 	backends: HashMap<BackendKey, Arc<BackendWithPolicies>>,
 
@@ -64,7 +64,7 @@ pub struct FrontendPolices {
 	pub tls: Option<frontend::TLS>,
 	pub tcp: Option<frontend::TCP>,
 	pub access_log: Option<frontend::LoggingPolicy>,
-	pub tracing: Option<()>,
+	pub tracing: Option<Arc<crate::types::agent::TracingPolicy>>,
 }
 
 impl FrontendPolices {
@@ -303,9 +303,9 @@ impl Default for Store {
 
 // RoutePath describes the objects traversed to reach the given route
 #[derive(Debug, Clone)]
-pub struct RoutePath {
-	pub listener: ListenerName,
-	pub route: RouteName,
+pub struct RoutePath<'a> {
+	pub listener: &'a ListenerName,
+	pub route: &'a RouteName,
 }
 
 impl Store {
@@ -330,24 +330,18 @@ impl Store {
 		tokio_stream::wrappers::BroadcastStream::new(sub)
 	}
 
-	pub fn route_policies(&self, path: RoutePath, inline: &[TrafficPolicy]) -> RoutePolicies {
-		let listener_target: ListenerTarget = path.listener.into();
-		let gateway = self.policies_by_target.get(&PolicyTarget::Gateway(
-			listener_target.strip_listener_fields(),
-		));
-		let listener = listener_target.listener_name.as_ref().and_then(|_| {
-			self
-				.policies_by_target
-				.get(&PolicyTarget::Gateway(listener_target.clone()))
-		});
-		let route = self
+	pub fn route_policies(&self, path: &RoutePath<'_>, inline: &[TrafficPolicy]) -> RoutePolicies {
+		let &RoutePath { listener, route } = path;
+		let gateway = self
 			.policies_by_target
-			.get(&PolicyTarget::Route(path.route.strip_route_rule_field()));
-		let route_rule = path.route.rule_name.as_ref().and_then(|_| {
-			self
-				.policies_by_target
-				.get(&PolicyTarget::Route(path.route.clone()))
-		});
+			.get(&listener.as_gateway_target_ref());
+		let listener = self
+			.policies_by_target
+			.get(&listener.as_listener_target_ref());
+		let route_rule = self
+			.policies_by_target
+			.get(&route.as_route_rule_target_ref());
+		let route = self.policies_by_target.get(&route.as_route_target_ref());
 		let rules = route_rule
 			.iter()
 			.copied()
@@ -443,16 +437,9 @@ impl Store {
 		pol
 	}
 
-	pub fn gateway_policies(&self, listener: ListenerName) -> GatewayPolicies {
-		let listener: ListenerTarget = listener.into();
-		let gateway = self
-			.policies_by_target
-			.get(&PolicyTarget::Gateway(listener.strip_listener_fields()));
-		let listener = listener.listener_name.as_ref().and_then(|_| {
-			self
-				.policies_by_target
-				.get(&PolicyTarget::Gateway(listener.clone()))
-		});
+	pub fn gateway_policies(&self, name: &ListenerName) -> GatewayPolicies {
+		let gateway = self.policies_by_target.get(&name.as_gateway_target_ref());
+		let listener = self.policies_by_target.get(&name.as_listener_target_ref());
 		let rules = listener
 			.iter()
 			.copied()
@@ -496,7 +483,7 @@ impl Store {
 	// is selected.
 	pub fn sub_backend_policies(
 		&self,
-		sub_backend: BackendTarget,
+		sub_backend: BackendTargetRef,
 		inline_policies: Option<&[BackendPolicy]>,
 	) -> BackendPolicies {
 		self.internal_backend_policies(
@@ -525,16 +512,16 @@ impl Store {
 
 	pub fn backend_policies(
 		&self,
-		backend: BackendTarget,
+		backend: BackendTargetRef,
 		inline_policies: &[&[BackendPolicy]],
 		path: Option<RoutePath>,
 	) -> BackendPolicies {
 		self.internal_backend_policies(
 			Some(backend.strip_section()),
-			Some(backend),
+			Some(backend.clone()),
 			inline_policies,
-			path.as_ref().map(|p| p.listener.clone()),
-			path.as_ref().map(|p| p.route.clone()),
+			path.as_ref().map(|p| p.listener),
+			path.as_ref().map(|p| p.route),
 		)
 	}
 
@@ -542,36 +529,25 @@ impl Store {
 	fn internal_backend_policies(
 		&self,
 		// backend with section stripped, always
-		backend: Option<BackendTarget>,
+		backend: Option<BackendTargetRef>,
 		// backend with section retained.
 		// Note this differs from other types, where just one is passed in and we strip them
-		sub_backend: Option<BackendTarget>,
+		sub_backend: Option<BackendTargetRef>,
 		inline_policies: &[&[BackendPolicy]],
-		gateway: Option<ListenerName>,
-		route: Option<RouteName>,
+		gateway: Option<&ListenerName>,
+		route: Option<&RouteName>,
 	) -> BackendPolicies {
 		let backend_rules =
-			backend.and_then(|t| self.policies_by_target.get(&PolicyTarget::Backend(t)));
+			backend.and_then(|t| self.policies_by_target.get(&PolicyTargetRef::Backend(t)));
 		let sub_backend_rules =
-			sub_backend.and_then(|t| self.policies_by_target.get(&PolicyTarget::Backend(t)));
-		let route_rule_rules = route
-			.clone()
-			.and_then(|t| self.policies_by_target.get(&PolicyTarget::Route(t)));
-		let route_rules = route.and_then(|t| {
-			self
-				.policies_by_target
-				.get(&PolicyTarget::Route(t.strip_route_rule_field()))
-		});
-		let listener_rules = gateway.clone().and_then(|t| {
-			self
-				.policies_by_target
-				.get(&PolicyTarget::Gateway(t.into()))
-		});
-		let gateway_rules = gateway.and_then(|t| {
-			self.policies_by_target.get(&PolicyTarget::Gateway(
-				ListenerTarget::from(t).strip_listener_fields(),
-			))
-		});
+			sub_backend.and_then(|t| self.policies_by_target.get(&PolicyTargetRef::Backend(t)));
+		let route_rule_rules =
+			route.and_then(|t| self.policies_by_target.get(&t.as_route_rule_target_ref()));
+		let route_rules = route.and_then(|t| self.policies_by_target.get(&t.as_route_target_ref()));
+		let listener_rules =
+			gateway.and_then(|t| self.policies_by_target.get(&t.as_listener_target_ref()));
+		let gateway_rules =
+			gateway.and_then(|t| self.policies_by_target.get(&t.as_gateway_target_ref()));
 
 		// RouteRule > Route > SubBackend > Backend > Service > Gateway
 		// Most specific (route context) to least specific (gateway-wide default)
@@ -650,8 +626,8 @@ impl Store {
 		pol
 	}
 
-	pub fn frontend_policies(&self, gateway: ListenerTarget) -> FrontendPolices {
-		let gw_rules = self.policies_by_target.get(&PolicyTarget::Gateway(gateway));
+	pub fn frontend_policies(&self, gateway: PolicyTargetRef) -> FrontendPolices {
+		let gw_rules = self.policies_by_target.get(&gateway);
 		let rules = gw_rules
 			.iter()
 			.copied()
@@ -661,7 +637,7 @@ impl Store {
 
 		let mut pol = FrontendPolices::default();
 		for rule in rules {
-			match &rule {
+			match rule {
 				FrontendPolicy::HTTP(p) => {
 					pol.http.get_or_insert_with(|| p.clone());
 				},
@@ -674,17 +650,33 @@ impl Store {
 				FrontendPolicy::AccessLog(p) => {
 					pol.access_log.get_or_insert_with(|| p.clone());
 				},
-				FrontendPolicy::Tracing(_p) => {
-					pol.tracing.get_or_insert(());
+				FrontendPolicy::Tracing(p) => {
+					pol.tracing.get_or_insert_with(|| p.clone());
 				},
 			}
 		}
 		pol
 	}
 
-	pub fn listeners(&self, bind: BindKey) -> Option<ListenerSet> {
-		// TODO: clone here is terrible!!!
-		self.binds.get(&bind).map(|b| b.listeners.clone())
+	pub fn bind(&self, bind: &BindKey) -> Option<Arc<Bind>> {
+		self.binds.get(bind).cloned()
+	}
+
+	/// find_bind looks up a bind by address. Typically, this is done by the kernel for us, but in some cases
+	/// we do userspace routing to a bind.
+	pub fn find_bind(&self, want: SocketAddr) -> Option<Arc<Bind>> {
+		self
+			.binds
+			.values()
+			.find(|b| {
+				let have = b.address;
+				if have.ip().is_unspecified() {
+					have.port() == want.port()
+				} else {
+					have == want
+				}
+			})
+			.cloned()
 	}
 
 	pub fn all(&self) -> Vec<Arc<Bind>> {

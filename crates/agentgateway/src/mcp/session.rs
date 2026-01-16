@@ -11,17 +11,16 @@ use futures_util::StreamExt;
 use rmcp::ErrorData;
 use rmcp::model::{
 	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, ErrorCode,
-	Implementation, JsonRpcError, ProtocolVersion, RequestId, ServerJsonRpcMessage,
+	Implementation, ProtocolVersion, RequestId, ServerJsonRpcMessage,
 };
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
-use rmcp::transport::common::server_side_http::{ServerSseMessage, session_id};
-use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::{KeepAlive, Sse, SseBody, SseStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::http::Response;
 use crate::mcp::handler::Relay;
 use crate::mcp::mergestream::Messages;
+use crate::mcp::streamablehttp::{ServerSseMessage, StreamableHttpPostResponse};
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
 use crate::mcp::{ClientError, MCPOperation, rbac};
 use crate::{mcp, *};
@@ -156,17 +155,55 @@ impl Session {
 				// Forward response as-is
 				return *resp;
 			}
+			// Handle authorization errors specially - return "Unknown" error
+			// to avoid leaking information about resource existence
+			if let UpstreamError::Authorization {
+				resource_type,
+				resource_name,
+			} = &e
+				&& let Some(ref req_id) = req_id
+			{
+				// Use ServerJsonRpcMessage::error for proper SSE compatibility
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
+						code: ErrorCode::INVALID_PARAMS,
+						message: format!("Unknown {resource_type}: {resource_name}").into(),
+						data: None,
+					},
+					req_id.clone(),
+				);
+				if let Ok(body) = serde_json::to_string(&error_msg) {
+					return http_json_error(StatusCode::OK, body);
+				}
+			}
+			// Handle security guard errors - return JSON-RPC error
+			// Use application/json format which MCP SDK can parse as error response
+			if let UpstreamError::SecurityGuard { code, message } = &e
+				&& let Some(ref req_id) = req_id
+			{
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
+						code: ErrorCode(-32001), // Custom error code for security violations
+						message: format!("{code}: {message}").into(),
+						data: None,
+					},
+					req_id.clone(),
+				);
+				if let Ok(body) = serde_json::to_string(&error_msg) {
+					return http_json_error(StatusCode::OK, body);
+				}
+			}
 			let err = if let Some(req_id) = req_id {
-				serde_json::to_string(&JsonRpcError {
-					jsonrpc: Default::default(),
-					id: req_id,
-					error: ErrorData {
+				// Use ServerJsonRpcMessage::error for proper SSE compatibility
+				let error_msg = ServerJsonRpcMessage::error(
+					ErrorData {
 						code: ErrorCode::INTERNAL_ERROR,
 						message: format!("failed to send message: {e}",).into(),
 						data: None,
 					},
-				})
-				.ok()
+					req_id,
+				);
+				serde_json::to_string(&error_msg).ok()
 			} else {
 				None
 			};
@@ -199,11 +236,25 @@ impl Session {
 				let ctx = IncomingRequestContext::new(parts);
 				match &mut r.request {
 					ClientRequest::InitializeRequest(ir) => {
+						// Reset security guard state on session re-initialization
+						// This clears baselines so rug pull detection starts fresh
+						self.relay.reset_all_security_guards();
+
 						let pv = ir.params.protocol_version.clone();
-						self
+						let result = self
 							.relay
-							.send_fanout(r, ctx, self.relay.merge_initialize(pv))
-							.await
+							.send_fanout(r, ctx.clone(), self.relay.merge_initialize(pv))
+							.await;
+
+						// Spawn background task to establish security baselines
+						// This fetches tools/list from all upstreams to create initial baselines
+						// for rug pull detection without blocking the initialize response
+						let relay = self.relay.clone();
+						tokio::spawn(async move {
+							relay.establish_security_baselines(ctx).await;
+						});
+
+						result
 					},
 					ClientRequest::ListToolsRequest(_) => {
 						log.non_atomic_mutate(|l| {
@@ -278,12 +329,57 @@ impl Session {
 							)),
 							cel.as_ref(),
 						) {
-							return Err(UpstreamError::Authorization);
+							return Err(UpstreamError::Authorization {
+								resource_type: "tool".to_string(),
+								resource_name: name.to_string(),
+							});
+						}
+
+						// Evaluate security guards on tool invocation
+						let arguments_value = ctr.params.arguments
+							.as_ref()
+							.map(|m| serde_json::Value::Object(m.clone()))
+							.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+						match self.relay.evaluate_tool_invoke(tool, &arguments_value, service_name, None) {
+							Ok(mcp::security::GuardDecision::Allow) => {
+								// Continue with the request
+							},
+							Ok(mcp::security::GuardDecision::Deny(reason)) => {
+								tracing::warn!(
+									tool = %tool,
+									code = %reason.code,
+									message = %reason.message,
+									"Security guard denied tool invocation"
+								);
+								return Err(UpstreamError::SecurityGuard {
+									code: reason.code,
+									message: reason.message,
+								});
+							},
+							Ok(mcp::security::GuardDecision::Modify(mcp::security::ModifyAction::Transform(modified))) => {
+								// Apply the modified arguments
+								if let serde_json::Value::Object(map) = modified {
+									ctr.params.arguments = Some(map);
+								}
+							},
+							Ok(mcp::security::GuardDecision::Modify(_)) => {
+								// Other modify actions not supported for tool invoke
+								tracing::warn!("Unsupported modify action for tool invocation");
+							},
+							Err(e) => {
+								tracing::error!(error = %e, "Security guard execution failed");
+								return Err(UpstreamError::SecurityGuard {
+									code: "guard_error".to_string(),
+									message: e.to_string(),
+								});
+							},
 						}
 
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
-						self.relay.send_single(r, ctx, service_name).await
+						// Use guarded send to evaluate responses for PII and other security checks
+						self.relay.send_single_guarded(r, ctx, service_name, true, None).await
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();
@@ -300,7 +396,10 @@ impl Session {
 							)),
 							cel.as_ref(),
 						) {
-							return Err(UpstreamError::Authorization);
+							return Err(UpstreamError::Authorization {
+								resource_type: "prompt".to_string(),
+								resource_name: name.to_string(),
+							});
 						}
 						gpr.params.name = prompt.to_string();
 						self.relay.send_single(r, ctx, service_name).await
@@ -320,7 +419,10 @@ impl Session {
 								)),
 								cel.as_ref(),
 							) {
-								return Err(UpstreamError::Authorization);
+								return Err(UpstreamError::Authorization {
+									resource_type: "resource".to_string(),
+									resource_name: uri.to_string(),
+								});
 							}
 							self.relay.send_single_without_multiplexing(r, ctx).await
 						} else {
@@ -331,7 +433,9 @@ impl Session {
 							))
 						}
 					},
-					ClientRequest::SubscribeRequest(_) | ClientRequest::UnsubscribeRequest(_) => {
+					ClientRequest::SubscribeRequest(_)
+					| ClientRequest::UnsubscribeRequest(_)
+					| ClientRequest::CustomRequest(_) => {
 						// TODO(https://github.com/agentgateway/agentgateway/issues/404)
 						Err(UpstreamError::InvalidMethod(r.request.method().to_string()))
 					},
@@ -348,6 +452,7 @@ impl Session {
 					ClientNotification::ProgressNotification(r) => r.method.as_str(),
 					ClientNotification::InitializedNotification(r) => r.method.as_str(),
 					ClientNotification::RootsListChangedNotification(r) => r.method.as_str(),
+					ClientNotification::CustomNotification(r) => r.method.as_str(),
 				};
 				let (_span, log, _cel) = mcp::handler::setup_request_log(&parts, method);
 				log.non_atomic_mutate(|l| {
@@ -371,12 +476,16 @@ pub struct SessionManager {
 	sessions: RwLock<HashMap<String, Session>>,
 }
 
+fn session_id() -> Arc<str> {
+	uuid::Uuid::new_v4().to_string().into()
+}
+
 impl SessionManager {
 	pub fn get_session(&self, id: &str) -> Option<Session> {
 		self.sessions.read().ok()?.get(id).cloned()
 	}
 
-	/// create_session establishes an MCP session.
+	/// create_session establishes an MCP session and registers it in the session manager.
 	pub fn create_session(&self, relay: Relay) -> Session {
 		let id = session_id();
 		let sess = Session {
@@ -387,6 +496,19 @@ impl SessionManager {
 		let mut sm = self.sessions.write().expect("write lock");
 		sm.insert(id.to_string(), sess.clone());
 		sess
+	}
+
+	/// create_stateless_session creates a session for stateless mode.
+	/// Unlike create_session, this does NOT register the session in the session manager.
+	/// The caller is responsible for calling session.delete_session() when done
+	/// to clean up upstream resources (e.g., stdio processes).
+	pub fn create_stateless_session(&self, relay: Relay) -> Session {
+		let id = session_id();
+		Session {
+			id,
+			relay: Arc::new(relay),
+			tx: None,
+		}
 	}
 
 	/// create_legacy_session establishes a legacy SSE session.
@@ -442,6 +564,14 @@ impl Drop for SessionDropper {
 fn http_error(status: StatusCode, body: impl Into<http::Body>) -> Response {
 	::http::Response::builder()
 		.status(status)
+		.body(body.into())
+		.expect("valid response")
+}
+
+fn http_json_error(status: StatusCode, body: impl Into<http::Body>) -> Response {
+	::http::Response::builder()
+		.status(status)
+		.header(http::header::CONTENT_TYPE, "application/json")
 		.body(body.into())
 		.expect("valid response")
 }

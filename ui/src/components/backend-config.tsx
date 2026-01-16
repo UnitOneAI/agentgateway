@@ -10,6 +10,7 @@ import {
   useBackendOperations,
 } from "@/lib/backend-hooks";
 import { BackendTable, AddBackendDialog } from "@/components/backend/backend-components";
+import { useXdsMode } from "@/hooks/use-xds-mode";
 
 export function BackendConfig() {
   const {
@@ -34,6 +35,10 @@ export function BackendConfig() {
     updateMcpTarget,
     parseAndUpdateUrl,
     updateMcpStateful,
+    // Security guard management
+    addSecurityGuard,
+    removeSecurityGuard,
+    updateSecurityGuardField,
   } = useBackendFormState();
 
   const {
@@ -46,11 +51,12 @@ export function BackendConfig() {
   } = useBackendDialogs();
 
   const { isSubmitting, addBackend, deleteBackend } = useBackendOperations();
+  const xds = useXdsMode();
 
   // Load backends on component mount
   useEffect(() => {
     loadBackends();
-  }, []);
+  }, [loadBackends]);
 
   // Event handlers
   const handleAddBackend = async () => {
@@ -94,6 +100,8 @@ export function BackendConfig() {
             resetBackendForm(binds);
             openAddDialog();
           }}
+          disabled={xds}
+          className={xds ? "opacity-50 cursor-not-allowed" : undefined}
         >
           <Plus className="mr-2 h-4 w-4" />
           Add Backend
@@ -141,6 +149,9 @@ export function BackendConfig() {
         updateMcpTarget={updateMcpTarget}
         parseAndUpdateUrl={parseAndUpdateUrl}
         updateMcpStateful={updateMcpStateful}
+        addSecurityGuard={addSecurityGuard}
+        removeSecurityGuard={removeSecurityGuard}
+        updateSecurityGuardField={updateSecurityGuardField}
       />
     </div>
   );

@@ -5,6 +5,7 @@ export interface LocalConfig {
   binds: Bind[];
   workloads?: any[];
   services?: any[];
+  appliedPolicies?: AppliedPolicy[];
 }
 
 export interface Bind {
@@ -14,7 +15,6 @@ export interface Bind {
 
 export interface Listener {
   name?: string | null;
-  gatewayName?: string | null;
   hostname?: string | null; // Can be a wildcard
   protocol: ListenerProtocol;
   tls?: TlsConfig | null;
@@ -104,6 +104,28 @@ export interface Policies {
   extAuthz?: any;
   timeout?: TimeoutPolicy | null;
   retry?: RetryPolicy | null;
+}
+
+// Top-level applied policy entries from config dump
+export interface AppliedPolicy {
+  key: string;
+  name: {
+    kind: string;
+    name: string;
+    namespace: string;
+  };
+  target: {
+    backend?: {
+      backend?: { name: string; namespace: string };
+      service?: { hostname: string; namespace: string };
+    };
+    route?: { name: string; namespace: string };
+  };
+  // Keep flexible to match varying shapes in dump; narrow types over time
+  policy: {
+    backend?: Partial<Policies>;
+    traffic?: Record<string, unknown>;
+  };
 }
 
 export interface TcpPolicies {
@@ -260,17 +282,21 @@ export interface DynamicBackend {
   // Empty object
 }
 
+// UI-friendly flat structure (matches local config format for write path)
 export interface McpBackend {
-  name: string;
+  // Display-only name from config_dump (namespace/name); absent in local config.
+  name?: string;
   targets: McpTarget[];
-  statefulMode?: McpStatefulMode; // "stateless" or "stateful"
+  statefulMode?: McpStatefulMode;
+  securityGuards?: SecurityGuard[];
 }
 
+// UI-friendly flat structure (matches local config format for write path)
 export interface AiBackend {
   name: string;
   provider: AiProvider;
-  hostOverride?: string | null; // String format: "hostname:port" or "ip:port"
-  pathOverride?: string | null; // String format: "/path"
+  hostOverride?: string | null;
+  pathOverride?: string | null;
 }
 
 export interface AiProvider {
@@ -310,9 +336,10 @@ export interface TargetMatcher {
   Regex?: string;
 }
 
+// UI-friendly format for SSE/MCP targets (matches config file format)
 export interface StreamHttpTarget {
   host: string;
-  port?: number; // uint32
+  port?: number;
   path?: string;
 }
 
@@ -322,10 +349,11 @@ export interface StdioTarget {
   env?: { [key: string]: string };
 }
 
+// UI-friendly format for OpenAPI targets (matches config file format)
 export interface OpenApiTarget {
   host: string;
-  port: number; // uint32
-  schema: any; // Schema definition
+  port?: number;
+  schema: any; // OpenAPI schema
 }
 
 export interface BackendRef {
@@ -452,3 +480,88 @@ export type PlaygroundListener = z.infer<typeof PlaygroundListenerSchema>;
 export interface ListenerInfo extends Listener {
   displayEndpoint: string;
 }
+
+// =============================================================================
+// Security Guards Types
+// =============================================================================
+
+// Guard phase types (matches Rust GuardPhase enum)
+export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
+
+// Failure mode (matches Rust FailureMode enum)
+export type FailureMode = "fail_closed" | "fail_open";
+
+// Guard types (matches Rust McpGuardKind enum)
+export type SecurityGuardType =
+  | "tool_poisoning"
+  | "rug_pull"
+  | "tool_shadowing"
+  | "server_whitelist"
+  | "pii";
+
+// PII types (matches Rust PiiType enum)
+export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
+
+// PII action (matches Rust PiiAction enum)
+export type PiiAction = "mask" | "reject";
+
+// Scan fields for tool poisoning
+export type ScanField = "name" | "description" | "input_schema";
+
+// Base security guard interface (common fields)
+export interface SecurityGuardBase {
+  id: string;
+  description?: string;
+  enabled: boolean;
+  priority: number;
+  timeout_ms: number;
+  failure_mode: FailureMode;
+  runs_on: GuardPhase[];
+}
+
+// Tool Poisoning config
+export interface ToolPoisoningGuard extends SecurityGuardBase {
+  type: "tool_poisoning";
+  strict_mode: boolean;
+  custom_patterns: string[];
+  scan_fields: ScanField[];
+  alert_threshold: number;
+}
+
+// Rug Pull config
+export interface RugPullGuard extends SecurityGuardBase {
+  type: "rug_pull";
+  risk_threshold: number;
+}
+
+// Tool Shadowing config
+export interface ToolShadowingGuard extends SecurityGuardBase {
+  type: "tool_shadowing";
+  block_duplicates: boolean;
+  protected_names: string[];
+}
+
+// Server Whitelist config
+export interface ServerWhitelistGuard extends SecurityGuardBase {
+  type: "server_whitelist";
+  allowed_servers: string[];
+  detect_typosquats: boolean;
+  similarity_threshold: number;
+}
+
+// PII Guard config
+export interface PiiGuard extends SecurityGuardBase {
+  type: "pii";
+  detect: PiiType[];
+  action: PiiAction;
+  min_score: number;
+  rejection_message?: string;
+}
+
+// Union type for all security guards
+export type SecurityGuard =
+  | ToolPoisoningGuard
+  | RugPullGuard
+  | ToolShadowingGuard
+  | ServerWhitelistGuard
+  | PiiGuard;

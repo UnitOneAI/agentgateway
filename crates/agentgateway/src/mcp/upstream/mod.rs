@@ -9,13 +9,13 @@ use std::io;
 pub(crate) use client::McpHttpClient;
 use rmcp::model::{ClientNotification, ClientRequest, JsonRpcRequest};
 use rmcp::transport::TokioChildProcess;
-use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use thiserror::Error;
 use tokio::process::Command;
 
 use crate::http::jwt::Claims;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::router::{McpBackendGroup, McpTarget};
+use crate::mcp::streamablehttp::StreamableHttpPostResponse;
 use crate::mcp::{mergestream, upstream};
 use crate::proxy::httpproxy::PolicyClient;
 use crate::types::agent::McpTargetSpec;
@@ -60,8 +60,11 @@ impl IncomingRequestContext {
 
 #[derive(Debug, Error)]
 pub enum UpstreamError {
-	#[error("unauthorized tool call")]
-	Authorization,
+	#[error("unknown {resource_type}: {resource_name}")]
+	Authorization {
+		resource_type: String,
+		resource_name: String,
+	},
 	#[error("invalid request: {0}")]
 	InvalidRequest(String),
 	#[error("unsupported method: {0}")]
@@ -80,6 +83,8 @@ pub enum UpstreamError {
 	Send,
 	#[error("upstream closed on receive")]
 	Recv,
+	#[error("security guard rejected: {code} - {message}")]
+	SecurityGuard { code: String, message: String },
 }
 
 // UpstreamTarget defines a source for MCP information.

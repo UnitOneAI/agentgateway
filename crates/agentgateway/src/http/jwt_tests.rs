@@ -379,6 +379,7 @@ fn make_min_req_log() -> crate::telemetry::log::RequestLog {
 		fields: LoggingFields::default(),
 		random_sampling: None,
 		client_sampling: None,
+		path: "/v1/traces".to_string(),
 	};
 	let cel = log::CelLogging::new(log_cfg, tracing_cfg);
 	let mut prom = Registry::default();
@@ -389,6 +390,7 @@ fn make_min_req_log() -> crate::telemetry::log::RequestLog {
 		peer_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 12345),
 		local_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
 		start,
+		raw_peer_addr: None,
 	};
 	RequestLog::new(cel, metrics, start, start_time, tcp_info)
 }

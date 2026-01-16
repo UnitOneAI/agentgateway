@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +45,10 @@ import {
   Loader2,
   Shield,
   AlertTriangle,
+  Eye,
+  Copy,
+  CheckCircle,
+  ShieldAlert,
 } from "lucide-react";
 import { Bind } from "@/lib/types";
 import { BackendWithContext } from "@/lib/backend-hooks";
@@ -53,7 +59,21 @@ import {
   HOST_TYPES,
   AI_MODEL_PLACEHOLDERS,
   AI_REGION_PLACEHOLDERS,
+  SECURITY_GUARD_TYPES,
+  GUARD_PHASES,
+  FAILURE_MODES,
+  PII_TYPES,
+  PII_ACTIONS,
+  SCAN_FIELDS,
 } from "@/lib/backend-constants";
+import type {
+  SecurityGuard,
+  SecurityGuardType,
+  GuardPhase,
+  FailureMode,
+  PiiType,
+  ScanField,
+} from "@/lib/types";
 import {
   getBackendType,
   getBackendName,
@@ -66,6 +86,7 @@ import {
   getBackendPolicyTypes,
   canDeleteBackend,
 } from "@/lib/backend-utils";
+import { useXdsMode } from "@/hooks/use-xds-mode";
 
 const getEnvAsRecord = (env: unknown): Record<string, string> => {
   return typeof env === "object" && env !== null ? (env as Record<string, string>) : {};
@@ -106,6 +127,7 @@ export const BackendTable: React.FC<BackendTableProps> = ({
   onDeleteBackend,
   isSubmitting,
 }) => {
+  const xds = useXdsMode();
   return (
     <div className="space-y-4">
       {Array.from(backendsByBind.entries()).map(([port, backendContexts]) => {
@@ -242,6 +264,8 @@ export const BackendTable: React.FC<BackendTableProps> = ({
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => onEditBackend(backendContext)}
+                                  disabled={xds}
+                                  className={xds ? "opacity-50 cursor-not-allowed" : undefined}
                                 >
                                   <Edit className="h-4 w-4" />
                                 </Button>
@@ -291,8 +315,8 @@ export const BackendTable: React.FC<BackendTableProps> = ({
                                       variant="ghost"
                                       size="icon"
                                       onClick={() => onDeleteBackend(backendContext)}
-                                      className="text-destructive hover:text-destructive"
-                                      disabled={isSubmitting}
+                                      className={`text-destructive hover:text-destructive ${xds ? "opacity-50 cursor-not-allowed" : ""}`}
+                                      disabled={isSubmitting || xds}
                                     >
                                       <Trash2 className="h-4 w-4" />
                                     </Button>
@@ -333,6 +357,10 @@ interface AddBackendDialogProps {
   updateMcpTarget: (index: number, field: string, value: any) => void;
   parseAndUpdateUrl: (index: number, url: string) => void;
   updateMcpStateful: (stateful: boolean) => void;
+  // Security guard management
+  addSecurityGuard: (type: SecurityGuardType) => void;
+  removeSecurityGuard: (index: number) => void;
+  updateSecurityGuardField: (index: number, field: string, value: any) => void;
 }
 
 export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
@@ -352,6 +380,9 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
   updateMcpTarget,
   parseAndUpdateUrl,
   updateMcpStateful,
+  addSecurityGuard,
+  removeSecurityGuard,
+  updateSecurityGuardField,
 }) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -505,6 +536,9 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
               updateMcpTarget={updateMcpTarget}
               parseAndUpdateUrl={parseAndUpdateUrl}
               updateMcpStateful={updateMcpStateful}
+              addSecurityGuard={addSecurityGuard}
+              removeSecurityGuard={removeSecurityGuard}
+              updateSecurityGuardField={updateSecurityGuardField}
             />
           )}
 
@@ -649,6 +683,531 @@ const HostBackendForm: React.FC<HostBackendFormProps> = ({ backendForm, setBacke
   </div>
 );
 
+// Security Guard icon mapping
+const getSecurityGuardIcon = (type: SecurityGuardType) => {
+  switch (type) {
+    case "pii":
+      return <Eye className="h-4 w-4" />;
+    case "tool_poisoning":
+      return <ShieldAlert className="h-4 w-4" />;
+    case "rug_pull":
+      return <AlertTriangle className="h-4 w-4" />;
+    case "tool_shadowing":
+      return <Copy className="h-4 w-4" />;
+    case "server_whitelist":
+      return <CheckCircle className="h-4 w-4" />;
+    default:
+      return <Shield className="h-4 w-4" />;
+  }
+};
+
+// Security Guards Section Component
+interface SecurityGuardsSectionProps {
+  guards: SecurityGuard[];
+  addSecurityGuard: (type: SecurityGuardType) => void;
+  removeSecurityGuard: (index: number) => void;
+  updateSecurityGuardField: (index: number, field: string, value: any) => void;
+}
+
+const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
+  guards,
+  addSecurityGuard,
+  removeSecurityGuard,
+  updateSecurityGuardField,
+}) => {
+  const [isExpanded, setIsExpanded] = React.useState(guards.length > 0);
+  const [expandedGuards, setExpandedGuards] = React.useState<Set<number>>(new Set());
+
+  const toggleGuardExpanded = (index: number) => {
+    setExpandedGuards((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
+      <div className="flex items-center justify-between py-2">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" size="sm" className="p-0 hover:bg-transparent">
+            {isExpanded ? (
+              <ChevronDown className="h-4 w-4 mr-2" />
+            ) : (
+              <ChevronRight className="h-4 w-4 mr-2" />
+            )}
+            <Shield className="h-4 w-4 mr-2" />
+            <span className="font-medium">Security Guards</span>
+            {guards.length > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {guards.length}
+              </Badge>
+            )}
+          </Button>
+        </CollapsibleTrigger>
+        <Select onValueChange={(value) => addSecurityGuard(value as SecurityGuardType)}>
+          <SelectTrigger className="w-[160px]">
+            <Plus className="h-3 w-3 mr-1" />
+            <span>Add Guard</span>
+          </SelectTrigger>
+          <SelectContent>
+            {SECURITY_GUARD_TYPES.map(({ value, label, description }) => (
+              <SelectItem key={value} value={value}>
+                <div className="flex items-center gap-2">
+                  {getSecurityGuardIcon(value)}
+                  <span>{label}</span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <CollapsibleContent className="space-y-3">
+        {guards.length === 0 ? (
+          <div className="text-center py-6 border-2 border-dashed border-muted rounded-md">
+            <Shield className="mx-auto h-8 w-8 text-muted-foreground mb-2" />
+            <p className="text-sm text-muted-foreground">No security guards configured</p>
+            <p className="text-xs text-muted-foreground">
+              Add guards to protect MCP communications
+            </p>
+          </div>
+        ) : (
+          guards.map((guard, index) => (
+            <Card key={index} className="p-3">
+              <div className="space-y-3">
+                {/* Guard Header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="p-0 h-auto"
+                      onClick={() => toggleGuardExpanded(index)}
+                    >
+                      {expandedGuards.has(index) ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                    </Button>
+                    <Badge variant="outline" className="flex items-center gap-1">
+                      {getSecurityGuardIcon(guard.type)}
+                      {SECURITY_GUARD_TYPES.find((t) => t.value === guard.type)?.label ||
+                        guard.type}
+                    </Badge>
+                    <span className="text-sm text-muted-foreground">{guard.id}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={guard.enabled}
+                        onChange={(e) =>
+                          updateSecurityGuardField(index, "enabled", e.target.checked)
+                        }
+                        className="form-checkbox h-4 w-4"
+                      />
+                      Enabled
+                    </label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeSecurityGuard(index)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Guard Configuration (expandable) */}
+                {expandedGuards.has(index) && (
+                  <div className="space-y-4 pt-2 border-t">
+                    {/* Common Fields */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Guard ID *</Label>
+                        <Input
+                          value={guard.id}
+                          onChange={(e) => updateSecurityGuardField(index, "id", e.target.value)}
+                          placeholder="my-guard"
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Priority (0-100)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={guard.priority}
+                          onChange={(e) =>
+                            updateSecurityGuardField(
+                              index,
+                              "priority",
+                              parseInt(e.target.value) || 0
+                            )
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Timeout (ms)</Label>
+                        <Input
+                          type="number"
+                          min={10}
+                          max={10000}
+                          value={guard.timeout_ms}
+                          onChange={(e) =>
+                            updateSecurityGuardField(
+                              index,
+                              "timeout_ms",
+                              parseInt(e.target.value) || 100
+                            )
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Failure Mode</Label>
+                        <Select
+                          value={guard.failure_mode}
+                          onValueChange={(value) =>
+                            updateSecurityGuardField(index, "failure_mode", value)
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {FAILURE_MODES.map(({ value, label }) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Runs On (multi-select as checkboxes) */}
+                    <div className="space-y-1">
+                      <Label className="text-xs">Runs On *</Label>
+                      <div className="flex flex-wrap gap-3">
+                        {GUARD_PHASES.map(({ value, label }) => (
+                          <label
+                            key={value}
+                            className="flex items-center gap-1 text-sm cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={guard.runs_on.includes(value)}
+                              onChange={(e) => {
+                                const newRunsOn = e.target.checked
+                                  ? [...guard.runs_on, value]
+                                  : guard.runs_on.filter((p) => p !== value);
+                                updateSecurityGuardField(index, "runs_on", newRunsOn);
+                              }}
+                              className="form-checkbox h-4 w-4"
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Type-specific configuration */}
+                    {guard.type === "pii" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          PII Detection Settings
+                        </h5>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Detect PII Types *</Label>
+                          <div className="flex flex-wrap gap-2">
+                            {PII_TYPES.map(({ value, label }) => (
+                              <label
+                                key={value}
+                                className="flex items-center gap-1 text-sm cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={guard.detect.includes(value)}
+                                  onChange={(e) => {
+                                    const newDetect = e.target.checked
+                                      ? [...guard.detect, value]
+                                      : guard.detect.filter((t) => t !== value);
+                                    updateSecurityGuardField(index, "detect", newDetect);
+                                  }}
+                                  className="form-checkbox h-4 w-4"
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Action</Label>
+                            <Select
+                              value={guard.action}
+                              onValueChange={(value) =>
+                                updateSecurityGuardField(index, "action", value)
+                              }
+                            >
+                              <SelectTrigger className="h-8 text-sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {PII_ACTIONS.map(({ value, label }) => (
+                                  <SelectItem key={value} value={value}>
+                                    {label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Min Score (0-1)</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.1}
+                              value={guard.min_score}
+                              onChange={(e) =>
+                                updateSecurityGuardField(
+                                  index,
+                                  "min_score",
+                                  parseFloat(e.target.value) || 0.3
+                                )
+                              }
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </div>
+                        {guard.action === "reject" && (
+                          <div className="space-y-1">
+                            <Label className="text-xs">Rejection Message</Label>
+                            <Input
+                              value={guard.rejection_message || ""}
+                              onChange={(e) =>
+                                updateSecurityGuardField(index, "rejection_message", e.target.value)
+                              }
+                              placeholder="PII detected - request rejected"
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {guard.type === "tool_poisoning" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          Tool Poisoning Settings
+                        </h5>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={guard.strict_mode}
+                            onChange={(e) =>
+                              updateSecurityGuardField(index, "strict_mode", e.target.checked)
+                            }
+                            className="form-checkbox h-4 w-4"
+                          />
+                          <Label className="text-sm cursor-pointer">Strict Mode</Label>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Scan Fields</Label>
+                          <div className="flex flex-wrap gap-3">
+                            {SCAN_FIELDS.map(({ value, label }) => (
+                              <label
+                                key={value}
+                                className="flex items-center gap-1 text-sm cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={guard.scan_fields.includes(value)}
+                                  onChange={(e) => {
+                                    const newFields = e.target.checked
+                                      ? [...guard.scan_fields, value]
+                                      : guard.scan_fields.filter((f) => f !== value);
+                                    updateSecurityGuardField(index, "scan_fields", newFields);
+                                  }}
+                                  className="form-checkbox h-4 w-4"
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Alert Threshold</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={guard.alert_threshold}
+                            onChange={(e) =>
+                              updateSecurityGuardField(
+                                index,
+                                "alert_threshold",
+                                parseInt(e.target.value) || 1
+                              )
+                            }
+                            className="h-8 text-sm w-24"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Custom Patterns (one per line)</Label>
+                          <textarea
+                            value={guard.custom_patterns.join("\n")}
+                            onChange={(e) =>
+                              updateSecurityGuardField(
+                                index,
+                                "custom_patterns",
+                                e.target.value.split("\n").filter(Boolean)
+                              )
+                            }
+                            placeholder="(?i)SYSTEM:\s*override&#10;(?i)ignore\s+all\s+previous"
+                            className="w-full h-20 px-2 py-1 text-sm border rounded-md"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {guard.type === "rug_pull" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          Rug Pull Settings
+                        </h5>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Risk Threshold</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={guard.risk_threshold}
+                            onChange={(e) =>
+                              updateSecurityGuardField(
+                                index,
+                                "risk_threshold",
+                                parseInt(e.target.value) || 5
+                              )
+                            }
+                            className="h-8 text-sm w-24"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {guard.type === "tool_shadowing" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          Tool Shadowing Settings
+                        </h5>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={guard.block_duplicates}
+                            onChange={(e) =>
+                              updateSecurityGuardField(index, "block_duplicates", e.target.checked)
+                            }
+                            className="form-checkbox h-4 w-4"
+                          />
+                          <Label className="text-sm cursor-pointer">Block Duplicates</Label>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Protected Names (one per line)</Label>
+                          <textarea
+                            value={guard.protected_names.join("\n")}
+                            onChange={(e) =>
+                              updateSecurityGuardField(
+                                index,
+                                "protected_names",
+                                e.target.value.split("\n").filter(Boolean)
+                              )
+                            }
+                            placeholder="initialize&#10;tools/list&#10;tools/call"
+                            className="w-full h-20 px-2 py-1 text-sm border rounded-md"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {guard.type === "server_whitelist" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          Server Whitelist Settings
+                        </h5>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Allowed Servers (one per line)</Label>
+                          <textarea
+                            value={guard.allowed_servers.join("\n")}
+                            onChange={(e) =>
+                              updateSecurityGuardField(
+                                index,
+                                "allowed_servers",
+                                e.target.value.split("\n").filter(Boolean)
+                              )
+                            }
+                            placeholder="github-mcp&#10;slack-mcp"
+                            className="w-full h-20 px-2 py-1 text-sm border rounded-md"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={guard.detect_typosquats}
+                            onChange={(e) =>
+                              updateSecurityGuardField(index, "detect_typosquats", e.target.checked)
+                            }
+                            className="form-checkbox h-4 w-4"
+                          />
+                          <Label className="text-sm cursor-pointer">Detect Typosquats</Label>
+                        </div>
+                        {guard.detect_typosquats && (
+                          <div className="space-y-1">
+                            <Label className="text-xs">Similarity Threshold (0-1)</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={guard.similarity_threshold}
+                              onChange={(e) =>
+                                updateSecurityGuardField(
+                                  index,
+                                  "similarity_threshold",
+                                  parseFloat(e.target.value) || 0.85
+                                )
+                              }
+                              className="h-8 text-sm w-24"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Card>
+          ))
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
 // MCP Backend Form Component
 interface McpBackendFormProps {
   backendForm: typeof DEFAULT_BACKEND_FORM;
@@ -657,6 +1216,9 @@ interface McpBackendFormProps {
   updateMcpTarget: (index: number, field: string, value: any) => void;
   parseAndUpdateUrl: (index: number, url: string) => void;
   updateMcpStateful: (stateful: boolean) => void;
+  addSecurityGuard: (type: SecurityGuardType) => void;
+  removeSecurityGuard: (index: number) => void;
+  updateSecurityGuardField: (index: number, field: string, value: any) => void;
 }
 
 const McpBackendForm: React.FC<McpBackendFormProps> = ({
@@ -666,6 +1228,9 @@ const McpBackendForm: React.FC<McpBackendFormProps> = ({
   updateMcpTarget,
   parseAndUpdateUrl,
   updateMcpStateful,
+  addSecurityGuard,
+  removeSecurityGuard,
+  updateSecurityGuardField,
 }) => (
   <div className="space-y-4">
     <div className="flex items-center justify-between">
@@ -884,6 +1449,14 @@ const McpBackendForm: React.FC<McpBackendFormProps> = ({
         </p>
       </div>
     )}
+
+    {/* Security Guards Section */}
+    <SecurityGuardsSection
+      guards={backendForm.securityGuards}
+      addSecurityGuard={addSecurityGuard}
+      removeSecurityGuard={removeSecurityGuard}
+      updateSecurityGuardField={updateSecurityGuardField}
+    />
 
     <div className="flex items-center space-x-2">
       <input

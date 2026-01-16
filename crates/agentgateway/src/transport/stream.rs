@@ -4,13 +4,11 @@ use std::io::{Error, IoSlice};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Instant;
 
 use agent_hbone::RWStream;
 use hyper_util::client::legacy::connect::{Connected, Connection};
-use prometheus_client::metrics::counter::Atomic;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
 #[cfg(unix)]
@@ -28,6 +26,10 @@ pub struct TCPConnectionInfo {
 	pub peer_addr: SocketAddr,
 	pub local_addr: SocketAddr,
 	pub start: Instant,
+	/// Original TCP peer address before PROXY protocol parsing.
+	/// For PROXY protocol connections, this is ztunnel's address (useful for debugging).
+	/// For regular connections, this is None.
+	pub raw_peer_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
@@ -179,6 +181,7 @@ impl Socket {
 			peer_addr: to_canonical(stream.peer_addr()?),
 			local_addr: to_canonical(stream.local_addr()?),
 			start: Instant::now(),
+			raw_peer_addr: None,
 		});
 		Ok(Socket {
 			ext,
@@ -238,6 +241,10 @@ impl Socket {
 		self.ext.get::<T>()
 	}
 
+	pub fn ext_mut(&mut self) -> &mut Extension {
+		&mut self.ext
+	}
+
 	pub fn must_ext<T: Send + Sync + 'static>(&self) -> &T {
 		self.ext().expect("expected required extension")
 	}
@@ -263,10 +270,8 @@ impl Socket {
 				.with_time(cfg.keepalives.time)
 				.with_retries(cfg.keepalives.retries)
 				.with_interval(cfg.keepalives.interval);
-			tracing::trace!(
-				"set keepalive: {:?}",
-				socket2::SockRef::from(&res).set_tcp_keepalive(&ka)
-			);
+			let res = socket2::SockRef::from(&res).set_tcp_keepalive(&ka);
+			tracing::trace!("set keepalive: {:?}", res);
 		}
 		Socket::from_tcp(res)
 	}
@@ -312,16 +317,9 @@ impl Socket {
 				.with_time(settings.keepalives.time)
 				.with_retries(settings.keepalives.retries)
 				.with_interval(settings.keepalives.interval);
-			tracing::trace!(
-				"set keepalive: {:?}",
-				socket2::SockRef::from(tcp).set_tcp_keepalive(&ka)
-			);
+			let res = socket2::SockRef::from(tcp).set_tcp_keepalive(&ka);
+			tracing::trace!("set keepalive: {:?}", res);
 		}
-		todo!()
-	}
-
-	pub fn counter(&self) -> Option<BytesCounter> {
-		self.metrics.counter.clone()
 	}
 }
 
@@ -438,7 +436,7 @@ impl AsyncRead for Socket {
 		let bytes = buf.filled().len();
 		let poll = Pin::new(&mut self.inner).poll_read(cx, buf);
 		let bytes = buf.filled().len() - bytes;
-		if let Some(c) = &self.metrics.counter {
+		if let Some(c) = &mut self.metrics.counter {
 			c.recv(bytes);
 		}
 		poll
@@ -451,7 +449,7 @@ impl AsyncWrite for Socket {
 		buf: &[u8],
 	) -> Poll<Result<usize, Error>> {
 		let poll = Pin::new(&mut self.inner).poll_write(cx, buf);
-		if let Some(c) = &self.metrics.counter
+		if let Some(c) = &mut self.metrics.counter
 			&& let Poll::Ready(Ok(bytes)) = poll
 		{
 			c.sent(bytes);
@@ -473,7 +471,7 @@ impl AsyncWrite for Socket {
 		bufs: &[IoSlice<'_>],
 	) -> Poll<Result<usize, Error>> {
 		let poll = Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
-		if let Some(c) = &self.metrics.counter
+		if let Some(c) = &mut self.metrics.counter
 			&& let Poll::Ready(Ok(bytes)) = poll
 		{
 			c.sent(bytes);
@@ -539,23 +537,20 @@ fn to_canonical(addr: SocketAddr) -> SocketAddr {
 	SocketAddr::from((ip, addr.port()))
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug)]
 pub struct BytesCounter {
-	counts: Arc<(AtomicU64, AtomicU64)>,
+	counts: (usize, usize),
 }
 
 impl BytesCounter {
-	pub fn sent(&self, amt: usize) {
-		self.counts.0.inc_by(amt as u64);
+	pub fn sent(&mut self, amt: usize) {
+		self.counts.0 += amt;
 	}
-	pub fn recv(&self, amt: usize) {
-		self.counts.1.inc_by(amt as u64);
+	pub fn recv(&mut self, amt: usize) {
+		self.counts.1 += amt
 	}
 	pub fn load(&self) -> (u64, u64) {
-		(
-			self.counts.0.load(Ordering::Relaxed),
-			self.counts.1.load(Ordering::Relaxed),
-		)
+		(self.counts.0 as u64, self.counts.1 as u64)
 	}
 }
 
