@@ -10,11 +10,11 @@ let xdsMode = false;
 let xdsModeKnown = false;
 let xdsModePromise: Promise<boolean> | null = null;
 
-// Helper function to fetch config dump from the server
+// Helper function to fetch config from the server
 export async function fetchConfigDump(apiUrl: string = API_URL): Promise<any> {
-  const resp = await fetch(`${apiUrl}/config_dump`);
+  const resp = await fetch(`${apiUrl}/config`);
   if (!resp.ok) {
-    throw new Error(`Failed to fetch config dump: ${resp.status}`);
+    throw new Error(`Failed to fetch config: ${resp.status}`);
   }
   return await resp.json();
 }
