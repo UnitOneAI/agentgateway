@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-const API_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:15000";
+// Always use relative URLs to connect to the actual gateway, not localhost
+const API_URL = "";
 
 type XdsSubscriber = (val: boolean) => void;
 const xdsSubscribers: XdsSubscriber[] = [];

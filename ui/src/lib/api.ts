@@ -9,7 +9,8 @@ import {
   subscribeXdsMode,
 } from "@/hooks/use-xds-mode";
 
-const API_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:15000";
+// Always use relative URLs to connect to the actual gateway, not localhost
+const API_URL = "";
 
 let currentXdsMode = isXdsMode();
 subscribeXdsMode((xdsMode) => {
