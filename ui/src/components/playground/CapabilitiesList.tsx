@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Bot, Zap, Settings } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Loader2, Bot, Zap, Settings, RefreshCw } from "lucide-react";
 
 interface CapabilitiesListProps {
   connectionType: "mcp" | "a2a" | null;
@@ -25,6 +26,7 @@ interface CapabilitiesListProps {
   selectedA2aSkillId: string | null;
   onMcpToolSelect: (tool: McpTool) => void;
   onA2aSkillSelect: (skill: AgentSkill) => void;
+  onRefreshMcpTools?: () => void;
 }
 
 export function CapabilitiesList({
@@ -37,6 +39,7 @@ export function CapabilitiesList({
   selectedA2aSkillId,
   onMcpToolSelect,
   onA2aSkillSelect,
+  onRefreshMcpTools,
 }: CapabilitiesListProps) {
   const title = connectionType === "a2a" ? "Skills" : "Tools";
   const description = `Select a ${title.toLowerCase()} to use`;
@@ -46,14 +49,22 @@ export function CapabilitiesList({
   return (
     <Card className="flex flex-col">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {connectionType === "a2a" ? (
-            <Bot className="h-5 w-5" />
-          ) : (
-            <Settings className="h-5 w-5" />
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            {connectionType === "a2a" ? (
+              <Bot className="h-5 w-5" />
+            ) : (
+              <Settings className="h-5 w-5" />
+            )}
+            {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
+          </CardTitle>
+          {connectionType === "mcp" && onRefreshMcpTools && (
+            <Button variant="outline" size="sm" onClick={onRefreshMcpTools} disabled={isLoading}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
           )}
-          {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
-        </CardTitle>
+        </div>
         <CardDescription>
           {connectionType === "a2a" ? a2aAgentCard?.description || "Unknown Agent" : description}
         </CardDescription>
