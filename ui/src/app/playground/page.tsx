@@ -1071,7 +1071,7 @@ export default function PlaygroundPage() {
                     <span className="font-medium text-sm">Request URL</span>
                   </div>
                   <div className="font-mono text-sm break-all">
-                    {selectedRoute.protocol}://{selectedRoute.listener.hostname || "localhost"}:
+                    {selectedRoute.protocol}://{selectedRoute.listener.hostname || (typeof window !== "undefined" ? window.location.hostname : "localhost")}:
                     {selectedRoute.bindPort}
                     {request.path}
                   </div>
