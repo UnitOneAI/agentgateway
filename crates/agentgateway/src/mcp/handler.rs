@@ -650,57 +650,76 @@ async fn messages_to_response(
 ) -> Result<Response, UpstreamError> {
 	use futures_util::StreamExt;
 	use rmcp::model::ServerJsonRpcMessage;
+	use std::time::Duration;
 
-	// Collect all messages from the stream
-	let mut messages: Vec<Result<ServerJsonRpcMessage, ClientError>> = stream.collect().await;
+	// Pin the stream for polling
+	let mut stream = Box::pin(stream);
 
-	// Check if we have exactly one message that is a Response (not notification)
-	if messages.len() == 1 {
-		if let Some(result) = messages.pop() {
-			return match result {
-				Ok(msg) => {
-					match &msg {
-						ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_) => {
-							// Single Response or Error - return as JSON for Streamable HTTP compatibility
-							Ok(json_response(&msg))
-						},
-						_ => {
-							// Notification - return as SSE
-							Ok(single_message_sse_response(msg))
-						}
-					}
+	// Get the first message with a timeout
+	let first_msg = tokio::time::timeout(Duration::from_secs(30), stream.next()).await;
+
+	let first_msg = match first_msg {
+		Ok(Some(msg)) => msg,
+		Ok(None) => {
+			// Empty stream - return empty JSON response
+			let empty_response = ServerJsonRpcMessage::error(
+				ErrorData::internal_error("No response from upstream".to_string(), None),
+				id,
+			);
+			return Ok(json_response(&empty_response));
+		},
+		Err(_) => {
+			// Timeout - return error
+			let timeout_response = ServerJsonRpcMessage::error(
+				ErrorData::internal_error("Upstream request timed out".to_string(), None),
+				id,
+			);
+			return Ok(json_response(&timeout_response));
+		}
+	};
+
+	// Check if first message is a Response/Error (terminal message)
+	match first_msg {
+		Ok(msg) => {
+			match &msg {
+				ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_) => {
+					// Single Response or Error - return as JSON for Streamable HTTP compatibility
+					Ok(json_response(&msg))
 				},
-				Err(e) => {
-					// Single error - return as JSON error
-					let error_msg = ServerJsonRpcMessage::error(
-						ErrorData::internal_error(e.to_string(), None),
-						id,
-					);
-					Ok(json_response(&error_msg))
+				_ => {
+					// Notification or other - need to stream, prepend first message
+					let first_sse = ServerSseMessage {
+						event_id: None,
+						message: Arc::new(msg),
+					};
+					let id_clone = id.clone();
+					let rest_stream = stream.map(move |rpc| {
+						let r = match rpc {
+							Ok(rpc) => rpc,
+							Err(e) => {
+								ServerJsonRpcMessage::error(ErrorData::internal_error(e.to_string(), None), id_clone.clone())
+							},
+						};
+						ServerSseMessage {
+							event_id: None,
+							message: Arc::new(r),
+						}
+					});
+					// Prepend the first message and stream the rest
+					let combined = futures::stream::once(async move { first_sse }).chain(rest_stream);
+					Ok(crate::mcp::session::sse_stream_response(combined, None))
 				}
-			};
+			}
+		},
+		Err(e) => {
+			// Error from stream - return as JSON error
+			let error_msg = ServerJsonRpcMessage::error(
+				ErrorData::internal_error(e.to_string(), None),
+				id,
+			);
+			Ok(json_response(&error_msg))
 		}
 	}
-
-	// Multiple messages - convert to SSE stream
-	let id_clone = id.clone();
-	let sse_messages = messages.into_iter().map(move |rpc| {
-		let r = match rpc {
-			Ok(rpc) => rpc,
-			Err(e) => {
-				ServerJsonRpcMessage::error(ErrorData::internal_error(e.to_string(), None), id_clone.clone())
-			},
-		};
-		ServerSseMessage {
-			event_id: None,
-			message: Arc::new(r),
-		}
-	});
-
-	Ok(crate::mcp::session::sse_stream_response(
-		futures::stream::iter(sse_messages),
-		None,
-	))
 }
 
 /// Returns a JSON response for a single ServerJsonRpcMessage
