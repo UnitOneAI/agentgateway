@@ -247,9 +247,15 @@ export default function PlaygroundPage() {
         if (listener.routes) {
           listener.routes.forEach((route: Route, routeIndex: number) => {
             const protocol = listener.protocol === ListenerProtocol.HTTPS ? "https" : "http";
-            const hostname = listener.hostname || "localhost";
+            // Use listener hostname if set, otherwise use current browser location for deployed environments
+            const hostname = listener.hostname || (typeof window !== "undefined" ? window.location.hostname : "localhost");
             const port = bind.port; // Use the actual port from the bind configuration
-            const baseEndpoint = `${protocol}://${hostname}:${port}`;
+            // For standard HTTPS (443) or HTTP (80) ports, omit the port from URL
+            const isStandardPort = (protocol === "https" && (typeof window !== "undefined" && window.location.port === "")) ||
+                                   (protocol === "http" && port === 80) ||
+                                   (protocol === "https" && port === 443);
+            const portSuffix = isStandardPort ? "" : `:${port}`;
+            const baseEndpoint = `${protocol}://${hostname}${portSuffix}`;
 
             // Generate route path and description with better pattern recognition
             let routePath = "/";
