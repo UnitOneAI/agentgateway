@@ -16,6 +16,7 @@ use rmcp::model::{
 	PromptsCapability, ProtocolVersion, RequestId, ResourcesCapability, ServerCapabilities,
 	ServerInfo, ServerJsonRpcMessage, ServerResult, Tool, ToolsCapability,
 };
+use rmcp::transport::common::http_header::JSON_MIME_TYPE;
 
 use crate::cel::ContextBuilder;
 use crate::http::Response;
@@ -492,7 +493,7 @@ impl Relay {
 		let stream = us.generic_stream(r, &ctx).await?;
 
 		if !evaluate_response {
-			return messages_to_response(id, stream);
+			return messages_to_response(id, stream).await;
 		}
 
 		// Wrap the stream to evaluate responses through security guards
@@ -518,7 +519,7 @@ impl Relay {
 			}
 		});
 
-		messages_to_response(id, guarded_stream)
+		messages_to_response(id, guarded_stream).await
 	}
 	// For some requests, we don't have a sane mapping of incoming requests to a specific
 	// downstream service when multiplexing. Only forward when we have only one backend.
@@ -551,7 +552,8 @@ impl Relay {
 		}
 
 		let ms = mergestream::MergeStream::new_without_merge(streams);
-		messages_to_response(RequestId::Number(0), ms)
+		// GET requests always use SSE for streaming - use sse_stream_response directly
+		sse_stream_response_from_merge(ms)
 	}
 	pub async fn send_fanout(
 		&self,
@@ -566,7 +568,7 @@ impl Relay {
 		}
 
 		let ms = mergestream::MergeStream::new(streams, id.clone(), merge);
-		messages_to_response(id, ms)
+		messages_to_response(id, ms).await
 	}
 	pub async fn send_notification(
 		&self,
@@ -640,12 +642,98 @@ pub fn setup_request_log(
 	(_span, log, cel)
 }
 
-fn messages_to_response(
+/// Converts a stream of messages to an HTTP response.
+/// For Streamable HTTP: returns JSON for single Response messages, SSE for notifications/multiple messages.
+async fn messages_to_response(
 	id: RequestId,
 	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
 ) -> Result<Response, UpstreamError> {
 	use futures_util::StreamExt;
 	use rmcp::model::ServerJsonRpcMessage;
+
+	// Collect all messages from the stream
+	let mut messages: Vec<Result<ServerJsonRpcMessage, ClientError>> = stream.collect().await;
+
+	// Check if we have exactly one message that is a Response (not notification)
+	if messages.len() == 1 {
+		if let Some(result) = messages.pop() {
+			return match result {
+				Ok(msg) => {
+					match &msg {
+						ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_) => {
+							// Single Response or Error - return as JSON for Streamable HTTP compatibility
+							Ok(json_response(&msg))
+						},
+						_ => {
+							// Notification - return as SSE
+							Ok(single_message_sse_response(msg))
+						}
+					}
+				},
+				Err(e) => {
+					// Single error - return as JSON error
+					let error_msg = ServerJsonRpcMessage::error(
+						ErrorData::internal_error(e.to_string(), None),
+						id,
+					);
+					Ok(json_response(&error_msg))
+				}
+			};
+		}
+	}
+
+	// Multiple messages - convert to SSE stream
+	let id_clone = id.clone();
+	let sse_messages = messages.into_iter().map(move |rpc| {
+		let r = match rpc {
+			Ok(rpc) => rpc,
+			Err(e) => {
+				ServerJsonRpcMessage::error(ErrorData::internal_error(e.to_string(), None), id_clone.clone())
+			},
+		};
+		ServerSseMessage {
+			event_id: None,
+			message: Arc::new(r),
+		}
+	});
+
+	Ok(crate::mcp::session::sse_stream_response(
+		futures::stream::iter(sse_messages),
+		None,
+	))
+}
+
+/// Returns a JSON response for a single ServerJsonRpcMessage
+fn json_response(msg: &ServerJsonRpcMessage) -> Response {
+	let body = serde_json::to_string(msg).unwrap_or_else(|e| {
+		format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}}}}"#, e)
+	});
+	::http::Response::builder()
+		.status(StatusCode::OK)
+		.header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+		.body(crate::http::Body::from(body))
+		.expect("valid response")
+}
+
+/// Returns an SSE response for a single message (used for notifications)
+fn single_message_sse_response(msg: ServerJsonRpcMessage) -> Response {
+	let sse_msg = ServerSseMessage {
+		event_id: None,
+		message: Arc::new(msg),
+	};
+	crate::mcp::session::sse_stream_response(
+		futures::stream::once(async move { sse_msg }),
+		None,
+	)
+}
+
+/// Converts a stream directly to SSE response without collecting (for GET streams).
+/// Use this for GET requests that establish a persistent SSE stream.
+fn sse_stream_response_from_merge(
+	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
+) -> Result<Response, UpstreamError> {
+	use futures_util::StreamExt;
+	let id = RequestId::Number(0);
 	let stream = stream.map(move |rpc| {
 		let r = match rpc {
 			Ok(rpc) => rpc,
@@ -653,7 +741,6 @@ fn messages_to_response(
 				ServerJsonRpcMessage::error(ErrorData::internal_error(e.to_string(), None), id.clone())
 			},
 		};
-		// TODO: is it ok to have no event_id here?
 		ServerSseMessage {
 			event_id: None,
 			message: Arc::new(r),
