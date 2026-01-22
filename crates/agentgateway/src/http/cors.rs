@@ -172,6 +172,10 @@ impl Cors {
 			if let Some(h) = &self.max_age {
 				rb = rb.header(header::ACCESS_CONTROL_MAX_AGE, h);
 			}
+			// Include allow_credentials in preflight response
+			if self.allow_credentials {
+				rb = rb.header(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, HEADER_VALUE_TRUE);
+			}
 			let response = rb.body(crate::http::Body::empty())?;
 			return Ok(PolicyResponse {
 				direct_response: Some(response),
