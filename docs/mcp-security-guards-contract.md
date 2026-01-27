@@ -767,24 +767,24 @@ cargo test --test wasm_integration
 
 ---
 
-## Examples
+## Reference Implementations
 
-See:
-- `examples/guards/native/tool-poisoning/` - Native guard implementation
-- `examples/guards/wasm/simple-pattern-guard/` - WASM guard implementation
-- `examples/configs/security-guards.yaml` - Complete configuration example
+See the actual guard implementations in the codebase:
+- `crates/agentgateway/src/mcp/security/native/tool_poisoning.rs` - Tool Poisoning Detection
+- `crates/agentgateway/src/mcp/security/native/rug_pull.rs` - Rug Pull Detection
+- `crates/agentgateway/src/mcp/security/native/pii_guard.rs` - PII Detection & Masking
+- `docs/security-guards-config-example.yaml` - Configuration reference
 
 ---
 
 ## Changelog
 
-### v0.1.0 (2025-12-30)
+### v0.1.0 (January 2026)
 
 - Initial contract specification
-- Native guard trait definition
-- WASM WIT interface
-- HTTP hook specification (optional)
-- Guard execution phases
-- Configuration schema
-- Performance characteristics
-- Security considerations
+- Native guard trait definition (`NativeGuard`)
+- Core types: `GuardDecision`, `GuardContext`, `DenyReason`, `ModifyAction`
+- Guard execution phases: `Request`, `Response`, `ToolsList`, `ToolInvoke`
+- Configuration schema with YAML support
+- WASM WIT interface (draft)
+- HTTP hook specification (optional, deferred)

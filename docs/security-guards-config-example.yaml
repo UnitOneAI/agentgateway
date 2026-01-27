@@ -1,22 +1,15 @@
-# Security Hooks Configuration Example
-# This file demonstrates how to configure the security hooks framework
+# MCP Security Guards Configuration Example
+# This file demonstrates how to configure the security guards framework
+#
+# Guards are configured per-backend in the main gateway config.
+# This file shows all available options for reference.
+#
+# Location: backends.[].mcp.security_guards in your gateway config
 
-security:
-  enabled: true
+# Example: Standalone security_guards configuration
+# (In practice, this goes under a backend's mcp configuration)
 
-  # Global security settings
-  global:
-    # Header to use for correlation ID tracking
-    correlation_id_header: X-Correlation-ID
-
-    # Generate correlation ID if not present
-    auto_generate_correlation_id: true
-
-    # Default failure mode if not specified per-hook
-    default_failure_mode: fail_closed
-
-    # Maximum execution time for all hooks combined
-    max_total_execution_time_ms: 500
+security_guards_example:
 
   # Audit logging configuration
   audit:

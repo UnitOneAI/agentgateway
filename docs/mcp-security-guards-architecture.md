@@ -500,7 +500,9 @@ Content-Type: application/json
 
 ## 9. Example: End-to-End WASM Guard
 
-See `examples/wasm-guards/` for a complete working example.
+WASM guard examples will be added once the WASM runtime integration is complete. For now, refer to:
+- [mcp-security-guards-contract.md](./mcp-security-guards-contract.md) for the WIT interface specification
+- `crates/agentgateway/src/mcp/security/wasm.rs` for the runtime integration (in development)
 
 ---
 
