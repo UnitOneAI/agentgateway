@@ -229,6 +229,14 @@ frozen-collections = "0.8.0"
 heck = "0.5"
 macro_rules_attribute = "0.2.2"
 
+# WASM runtime for security guards
+wasmtime = { version = "29", default-features = false, features = [
+    "cranelift",
+    "component-model",
+    "cache",
+] }
+wasmtime-wasi = { version = "29" }
+
 # Release optimized but without as many dependencies, suitable for incremental development
 [profile.quick-release]
 inherits = "release"

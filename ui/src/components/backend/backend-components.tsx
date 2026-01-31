@@ -49,6 +49,7 @@ import {
   Copy,
   CheckCircle,
   ShieldAlert,
+  Code,
 } from "lucide-react";
 import { Bind } from "@/lib/types";
 import { BackendWithContext } from "@/lib/backend-hooks";
@@ -701,6 +702,8 @@ const getSecurityGuardIcon = (type: SecurityGuardType) => {
       return <Copy className="h-4 w-4" />;
     case "server_whitelist":
       return <CheckCircle className="h-4 w-4" />;
+    case "wasm":
+      return <Code className="h-4 w-4" />;
     default:
       return <Shield className="h-4 w-4" />;
   }
@@ -1200,6 +1203,96 @@ const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
                             />
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {guard.type === "wasm" && (
+                      <div className="space-y-3 p-3 bg-muted/50 rounded-md">
+                        <h5 className="text-xs font-medium text-muted-foreground">
+                          WASM Guard Settings
+                        </h5>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Module Path *</Label>
+                          <Input
+                            value={guard.module_path}
+                            onChange={(e) =>
+                              updateSecurityGuardField(index, "module_path", e.target.value)
+                            }
+                            placeholder="./path/to/guard.wasm"
+                            className="h-8 text-sm"
+                          />
+                          {guard.module_path && !guard.module_path.endsWith(".wasm") && (
+                            <p className="text-xs text-yellow-600">
+                              Warning: Path should end with .wasm
+                            </p>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Max Memory (MB)</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={1024}
+                              value={Math.round(guard.max_memory_bytes / (1024 * 1024))}
+                              onChange={(e) =>
+                                updateSecurityGuardField(
+                                  index,
+                                  "max_memory_bytes",
+                                  (parseInt(e.target.value) || 10) * 1024 * 1024
+                                )
+                              }
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Max Fuel (instructions)</Label>
+                            <Input
+                              type="number"
+                              min={10000}
+                              max={100000000}
+                              step={100000}
+                              value={guard.max_fuel}
+                              onChange={(e) =>
+                                updateSecurityGuardField(
+                                  index,
+                                  "max_fuel",
+                                  parseInt(e.target.value) || 1000000
+                                )
+                              }
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Config (key=value per line)</Label>
+                          <textarea
+                            value={Object.entries(guard.config || {})
+                              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                              .join("\n")}
+                            onChange={(e) => {
+                              const configObj: Record<string, unknown> = {};
+                              e.target.value.split("\n").forEach((line) => {
+                                const eqIdx = line.indexOf("=");
+                                if (eqIdx > 0) {
+                                  const key = line.slice(0, eqIdx).trim();
+                                  const valStr = line.slice(eqIdx + 1).trim();
+                                  try {
+                                    configObj[key] = JSON.parse(valStr);
+                                  } catch {
+                                    configObj[key] = valStr;
+                                  }
+                                }
+                              });
+                              updateSecurityGuardField(index, "config", configObj);
+                            }}
+                            placeholder={'sensitivity="high"\ndeny_threshold=0.5'}
+                            className="w-full h-20 px-2 py-1 text-sm border rounded-md font-mono"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Values are JSON-parsed (use quotes for strings)
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>

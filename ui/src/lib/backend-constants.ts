@@ -121,6 +121,7 @@ import type {
   ToolShadowingGuard,
   ServerWhitelistGuard,
   PiiGuard,
+  WasmGuard,
   SecurityGuard,
 } from "./types";
 
@@ -180,6 +181,17 @@ export const DEFAULT_PII_GUARD: PiiGuard = {
   rejection_message: "",
 };
 
+// Default WASM guard
+export const DEFAULT_WASM_GUARD: WasmGuard = {
+  ...DEFAULT_SECURITY_GUARD_BASE,
+  type: "wasm",
+  runs_on: ["response", "tools_list"],
+  module_path: "",
+  max_memory_bytes: 10 * 1024 * 1024, // 10 MB
+  max_fuel: 1_000_000, // 1 million instructions
+  config: {},
+};
+
 // Security guard type metadata for UI
 export const SECURITY_GUARD_TYPES: Array<{
   value: SecurityGuardType;
@@ -210,6 +222,11 @@ export const SECURITY_GUARD_TYPES: Array<{
     value: "server_whitelist",
     label: "Server Whitelist",
     description: "Only allow trusted MCP servers",
+  },
+  {
+    value: "wasm",
+    label: "WASM Guard",
+    description: "Custom WebAssembly security guard module",
   },
 ];
 
@@ -264,5 +281,7 @@ export function getDefaultGuard(type: SecurityGuardType): SecurityGuard {
       return { ...DEFAULT_SERVER_WHITELIST_GUARD, id: baseId };
     case "pii":
       return { ...DEFAULT_PII_GUARD, id: baseId };
+    case "wasm":
+      return { ...DEFAULT_WASM_GUARD, id: baseId };
   }
 }

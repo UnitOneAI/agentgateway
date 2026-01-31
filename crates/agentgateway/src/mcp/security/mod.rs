@@ -208,6 +208,13 @@ pub enum GuardError {
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+// Global WASM module cache for compiled components
+#[cfg(feature = "wasm-guards")]
+lazy_static::lazy_static! {
+	static ref WASM_CACHE: wasm::WasmModuleCache = wasm::WasmModuleCache::new()
+		.expect("Failed to initialize WASM module cache");
+}
+
 /// Registry for shared GuardExecutor instances, keyed by backend name.
 /// This enables hot-reload of security guards across existing SSE sessions.
 #[derive(Clone, Default)]
@@ -355,11 +362,12 @@ fn initialize_guards(configs: Vec<McpSecurityGuard>) -> Result<Vec<InitializedGu
 				Arc::new(native::PiiGuard::new(cfg.clone()))
 			},
 			#[cfg(feature = "wasm-guards")]
-			McpGuardKind::Wasm(_cfg) => {
-				// WASM guards need special handling
-				return Err(GuardError::ConfigError(
-					"WASM guards not yet fully implemented".to_string()
-				));
+			McpGuardKind::Wasm(cfg) => {
+				Arc::new(wasm::WasmProbe::new(
+					config.id.clone(),
+					cfg.clone(),
+					&WASM_CACHE,
+				)?)
 			},
 		};
 

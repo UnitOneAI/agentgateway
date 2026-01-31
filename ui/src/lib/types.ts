@@ -497,7 +497,8 @@ export type SecurityGuardType =
   | "rug_pull"
   | "tool_shadowing"
   | "server_whitelist"
-  | "pii";
+  | "pii"
+  | "wasm";
 
 // PII types (matches Rust PiiType enum)
 export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
@@ -558,10 +559,20 @@ export interface PiiGuard extends SecurityGuardBase {
   rejection_message?: string;
 }
 
+// WASM Guard config (for custom WebAssembly guards)
+export interface WasmGuard extends SecurityGuardBase {
+  type: "wasm";
+  module_path: string;
+  max_memory_bytes: number;
+  max_fuel: number;
+  config: Record<string, unknown>;
+}
+
 // Union type for all security guards
 export type SecurityGuard =
   | ToolPoisoningGuard
   | RugPullGuard
   | ToolShadowingGuard
   | ServerWhitelistGuard
-  | PiiGuard;
+  | PiiGuard
+  | WasmGuard;
