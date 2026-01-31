@@ -15,7 +15,9 @@ fn main() {
 			.arg("../../common/scripts/report_build_info.ps1")
 			.output()
 	} else {
-		Command::new("../../common/scripts/report_build_info.sh").output()
+		Command::new("sh")
+			.arg("../../common/scripts/report_build_info.sh")
+			.output()
 	};
 
 	match output {
