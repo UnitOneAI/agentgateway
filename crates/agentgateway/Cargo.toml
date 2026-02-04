@@ -16,6 +16,7 @@ schema = ["schemars"]
 tls-ring = ["rustls/ring", "tokio-rustls/ring"]
 internal_benches = ["divan"]
 testing = ["dep:reqwest"]
+wasm-guards = ["dep:wasmtime", "dep:wasmtime-wasi"]
 
 [dependencies]
 a2a-sdk.workspace = true
@@ -140,6 +141,8 @@ url.workspace = true
 uuid.workspace = true
 x509-parser.workspace = true
 reqwest = { optional = true, workspace = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
 websocket-sans-io.workspace = true
 vector-map.workspace = true
 flagset.workspace = true

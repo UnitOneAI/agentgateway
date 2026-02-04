@@ -206,6 +206,8 @@ which = "8.0"
 websocket-sans-io = '0.1'
 vector-map = "1.0.2"
 flagset = "0.4.7"
+wasmtime = { version = "27.0", default-features = false, features = ["component-model", "cranelift"] }
+wasmtime-wasi = { version = "27.0", default-features = false }
 crossbeam-channel = "0.5"
 http-serde = "2.1"
 itoa = "1.0"
