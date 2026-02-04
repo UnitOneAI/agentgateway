@@ -95,6 +95,10 @@ pub enum McpGuardKind {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GuardPhase {
+    /// Before establishing connection to MCP server
+    /// Used for server whitelisting, typosquat detection, TLS validation
+    Connection,
+
     /// Before forwarding client request to MCP server
     Request,
 
@@ -396,6 +400,60 @@ impl GuardExecutor {
 		*guards = new_guards;
 		tracing::info!("Security guards updated via hot-reload");
 		Ok(())
+	}
+
+	/// Execute guards before establishing connection to an MCP server
+	/// Used for server whitelisting, typosquat detection, TLS validation
+	pub fn evaluate_connection(
+		&self,
+		server_name: &str,
+		server_url: Option<&str>,
+		context: &GuardContext,
+	) -> GuardResult {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		tracing::info!(
+			guard_count = guards.len(),
+			server = %server_name,
+			server_url = ?server_url,
+			"GuardExecutor::evaluate_connection called"
+		);
+		for guard_entry in guards.iter() {
+			// Only run guards configured for Connection phase
+			if !guard_entry.config.runs_on.contains(&GuardPhase::Connection) {
+				continue;
+			}
+
+			// Execute guard with timeout
+			let result = self.execute_with_timeout(
+				|| guard_entry.guard.evaluate_connection(server_name, server_url, context),
+				Duration::from_millis(guard_entry.config.timeout_ms),
+				&guard_entry.config,
+			);
+
+			// Handle result based on failure mode
+			match result {
+				Ok(GuardDecision::Allow) => continue,
+				Ok(decision) => return Ok(decision),
+				Err(e) => {
+					match guard_entry.config.failure_mode {
+						FailureMode::FailClosed => {
+							return Err(GuardError::ExecutionError(format!(
+								"Guard {} failed: {}",
+								guard_entry.config.id,
+								e
+							)));
+						},
+						FailureMode::FailOpen => {
+							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
+								guard_entry.config.id, e);
+							continue;
+						},
+					}
+				},
+			}
+		}
+
+		Ok(GuardDecision::Allow)
 	}
 
 	/// Execute guards on a tools/list response

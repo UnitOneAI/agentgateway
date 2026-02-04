@@ -31,6 +31,13 @@ pub struct WasmGuardConfig {
     #[serde(default = "default_max_memory")]
     pub max_memory: usize,
 
+    /// Maximum WebAssembly stack size (bytes).
+    /// Python WASM components require significantly more stack space (2-4 MB)
+    /// due to the embedded Python interpreter.
+    /// Default: 2 MB (sufficient for most Python guards)
+    #[serde(default = "default_max_wasm_stack")]
+    pub max_wasm_stack: usize,
+
     /// Timeout for guard execution (milliseconds)
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
@@ -44,8 +51,34 @@ fn default_max_memory() -> usize {
     10 * 1024 * 1024 // 10 MB
 }
 
+fn default_max_wasm_stack() -> usize {
+    2 * 1024 * 1024 // 2 MB - sufficient for Python WASM guards
+}
+
 fn default_timeout_ms() -> u64 {
     100
+}
+
+/// Run a closure on a thread with a large stack.
+/// Python WASM components require significant native stack space that exceeds
+/// the default thread stack size, especially on Windows where the main thread
+/// stack cannot be grown dynamically.
+/// Uses scoped threads to avoid 'static lifetime requirements.
+#[cfg(feature = "wasm-guards")]
+fn run_with_large_stack<F, T>(stack_size: usize, f: F) -> T
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                // Grow the stack on this thread before executing
+                stacker::grow(stack_size, f)
+            })
+            .join()
+            .expect("WASM thread panicked")
+    })
 }
 
 /// State stored in the wasmtime Store for host functions
@@ -120,15 +153,24 @@ impl WasmGuard {
         // Configure wasmtime engine
         let mut engine_config = Config::new();
         engine_config.wasm_component_model(true);
+        // Set maximum WASM stack size - Python WASM components require larger stacks
+        // due to the embedded interpreter
+        engine_config.max_wasm_stack(config.max_wasm_stack);
 
         let engine = Engine::new(&engine_config).map_err(|e| {
             GuardError::WasmError(format!("Failed to create wasmtime engine: {}", e))
         })?;
 
         // Load and compile the WASM component
-        let component = Component::from_file(&engine, expanded_path.as_ref()).map_err(|e| {
-            GuardError::WasmError(format!("Failed to load WASM component: {}", e))
-        })?;
+        // Python WASM components require significant native stack space during compilation
+        // due to the embedded interpreter. On Windows, the main thread stack cannot be grown,
+        // so we spawn a dedicated thread with a large stack (8MB) for compilation.
+        let path_for_thread = expanded_path.to_string();
+        let engine_clone = engine.clone();
+        let component = run_with_large_stack(8 * 1024 * 1024, move || {
+            Component::from_file(&engine_clone, &path_for_thread)
+        })
+        .map_err(|e| GuardError::WasmError(format!("Failed to load WASM component: {}", e)))?;
 
         tracing::info!(
             guard_id = %guard_id,
@@ -263,6 +305,20 @@ impl WasmGuard {
                         )))
                     }
                 }
+                "warn" => {
+                    // Warn means allow but log the warnings
+                    if let Some(Val::List(warnings)) = payload.as_deref() {
+                        for warning in warnings {
+                            if let Val::String(msg) = warning {
+                                tracing::warn!(
+                                    warning = %msg,
+                                    "WASM guard returned warning"
+                                );
+                            }
+                        }
+                    }
+                    Ok(GuardDecision::Allow)
+                }
                 _ => Err(GuardError::WasmError(format!(
                     "Unknown decision variant: {}",
                     name
@@ -319,7 +375,7 @@ impl WasmGuard {
         }
     }
 
-    /// Execute the guard with timeout protection
+    /// Execute the guard with timeout protection and sufficient stack space
     fn execute_with_timeout<F>(&self, f: F) -> GuardResult
     where
         F: FnOnce() -> GuardResult,
@@ -327,7 +383,10 @@ impl WasmGuard {
         // For synchronous execution, we use a simple approach
         // In production, this could be enhanced with proper async timeout
         let start = std::time::Instant::now();
-        let result = f();
+        // Python WASM components require significant native stack space due to the
+        // embedded interpreter. Use stacker to grow the native stack when needed.
+        // Use stacker::grow to force allocation of a large stack segment (8MB).
+        let result = stacker::grow(8 * 1024 * 1024, f);
         let elapsed = start.elapsed();
 
         if elapsed.as_millis() as u64 > self.config.timeout_ms {
@@ -430,6 +489,7 @@ impl NativeGuard for WasmGuard {
             // Build context as WIT record
             let context_record = Val::Record(vec![
                 ("server-name".into(), Val::String(context.server_name.clone().into())),
+                ("server-url".into(), Val::Option(None)), // Not applicable for tools_list evaluation
                 (
                     "identity".into(),
                     match &context.identity {
@@ -493,6 +553,95 @@ impl NativeGuard for WasmGuard {
         Ok(GuardDecision::Allow)
     }
 
+    fn evaluate_connection(
+        &self,
+        server_name: &str,
+        server_url: Option<&str>,
+        context: &GuardContext,
+    ) -> GuardResult {
+        self.execute_with_timeout(|| {
+            tracing::debug!(
+                guard_id = %self.guard_id,
+                server = %server_name,
+                server_url = ?server_url,
+                "Evaluating connection with WASM guard"
+            );
+
+            let linker = self.create_linker()?;
+            let state = WasmState::new(self.config.config.clone());
+            let mut store = Store::new(&self.engine, state);
+
+            // Instantiate the component
+            let instance = linker
+                .instantiate(&mut store, &self.component)
+                .map_err(|e| GuardError::WasmError(format!("Failed to instantiate component: {}", e)))?;
+
+            // Get the exported function from the guard interface
+            let guard_export_idx = instance
+                .get_export(&mut store, None, "mcp:security-guard/guard@0.1.0")
+                .ok_or_else(|| {
+                    GuardError::WasmError(
+                        "Guard interface not found in component exports".to_string(),
+                    )
+                })?;
+
+            // Get the evaluate-server-connection function
+            let func_export_idx = instance
+                .get_export(&mut store, Some(&guard_export_idx), "evaluate-server-connection")
+                .ok_or_else(|| {
+                    GuardError::WasmError(
+                        "Function evaluate-server-connection not found in guard interface".to_string(),
+                    )
+                })?;
+
+            let func = instance
+                .get_func(&mut store, &func_export_idx)
+                .ok_or_else(|| {
+                    GuardError::WasmError(
+                        "Could not get function from export index".to_string(),
+                    )
+                })?;
+
+            // Build context as WIT record with server_url
+            let context_record = Val::Record(vec![
+                ("server-name".into(), Val::String(context.server_name.clone().into())),
+                (
+                    "server-url".into(),
+                    match server_url {
+                        Some(url) => Val::Option(Some(Box::new(Val::String(url.to_string().into())))),
+                        None => Val::Option(None),
+                    },
+                ),
+                (
+                    "identity".into(),
+                    match &context.identity {
+                        Some(id) => Val::Option(Some(Box::new(Val::String(id.clone().into())))),
+                        None => Val::Option(None),
+                    },
+                ),
+                (
+                    "metadata".into(),
+                    Val::String(
+                        serde_json::to_string(&context.metadata)
+                            .unwrap_or_else(|_| "{}".to_string())
+                            .into(),
+                    ),
+                ),
+            ]);
+
+            // Call the function
+            let mut results = vec![Val::Bool(false)]; // Placeholder for result
+            func.call(&mut store, &[context_record], &mut results)
+                .map_err(|e| GuardError::WasmError(format!("WASM function call failed: {}", e)))?;
+
+            // Post-call cleanup
+            func.post_return(&mut store)
+                .map_err(|e| GuardError::WasmError(format!("WASM post-return failed: {}", e)))?;
+
+            Self::parse_decision(&results)
+        })
+    }
+
     fn reset_server(&self, server_name: &str) {
         // WASM guards are stateless by design - no per-server state to reset
         tracing::debug!(
@@ -525,6 +674,7 @@ mod tests {
         let invalid_config = WasmGuardConfig {
             module_path: String::new(),
             max_memory: 1024 * 1024,
+            max_wasm_stack: default_max_wasm_stack(),
             timeout_ms: 100,
             config: HashMap::new(),
         };
@@ -538,6 +688,7 @@ mod tests {
         let valid_config = WasmGuardConfig {
             module_path: "/path/to/probe.wasm".to_string(),
             max_memory: 10 * 1024 * 1024,
+            max_wasm_stack: default_max_wasm_stack(),
             timeout_ms: 100,
             config: HashMap::new(),
         };
@@ -559,6 +710,7 @@ mod tests {
     #[test]
     fn test_default_config_values() {
         assert_eq!(default_max_memory(), 10 * 1024 * 1024);
+        assert_eq!(default_max_wasm_stack(), 2 * 1024 * 1024);
         assert_eq!(default_timeout_ms(), 100);
     }
 
@@ -647,6 +799,7 @@ module_path: ./guards/test.wasm
         let config = WasmGuardConfig {
             module_path: wasm_path.to_str().unwrap().to_string(),
             max_memory: 10 * 1024 * 1024,
+            max_wasm_stack: default_max_wasm_stack(),
             timeout_ms: 1000,
             config: HashMap::new(), // Use default patterns
         };

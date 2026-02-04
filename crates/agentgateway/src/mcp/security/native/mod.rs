@@ -21,6 +21,19 @@ use super::{GuardContext, GuardDecision, GuardResult};
 
 /// Common trait for all native guards
 pub trait NativeGuard: Send + Sync {
+    /// Evaluate before establishing connection to an MCP server
+    /// Used for server whitelisting, typosquat detection, TLS validation
+    fn evaluate_connection(
+        &self,
+        server_name: &str,
+        server_url: Option<&str>,
+        context: &GuardContext,
+    ) -> GuardResult {
+        // Default: allow
+        let _ = (server_name, server_url, context);
+        Ok(GuardDecision::Allow)
+    }
+
     /// Evaluate a tools/list response
     fn evaluate_tools_list(
         &self,

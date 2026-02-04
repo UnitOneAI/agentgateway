@@ -20,6 +20,7 @@ interface guard {
     /// Context provided by the host
     record guard-context {
         server-name: string,
+        server-url: option<string>,  /// URL of the MCP server (for connection validation)
         identity: option<string>,
         metadata: string,  /// JSON-serialized metadata
     }
@@ -28,7 +29,8 @@ interface guard {
     variant decision {
         allow,
         deny(deny-reason),
-        modify(string),  /// JSON-serialized modification
+        modify(string),  /// JSON-serialized modification (for PII masking, etc.)
+        warn(list<string>),  /// Allow with warnings
     }
 
     /// Reason for denying a request
@@ -41,6 +43,10 @@ interface guard {
     /// Main guard evaluation function
     /// Called by the host for every tools/list response
     evaluate-tools-list: func(tools: list<tool>, context: guard-context) -> result<decision, string>;
+
+    /// Evaluate server connection before establishing
+    /// Called by the host before connecting to an MCP server
+    evaluate-server-connection: func(context: guard-context) -> result<decision, string>;
 }
 
 /// Host interface - functions provided by AgentGateway to the WASM module
