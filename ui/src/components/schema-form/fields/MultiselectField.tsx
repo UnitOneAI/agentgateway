@@ -4,7 +4,11 @@
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { type SchemaProperty, type ArraySchemaProperty, type StringSchemaProperty } from "@/lib/guard-schema-types";
+import {
+  type SchemaProperty,
+  type ArraySchemaProperty,
+  type StringSchemaProperty,
+} from "@/lib/guard-schema-types";
 
 interface MultiselectFieldProps {
   name: string;
@@ -44,9 +48,7 @@ export function MultiselectField({
   return (
     <div className="space-y-2">
       <Label>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <div className="space-y-2">
         {enumValues.map((enumValue) => (
           <div key={enumValue} className="flex items-center space-x-2">

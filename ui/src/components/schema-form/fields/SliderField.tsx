@@ -16,14 +16,7 @@ interface SliderFieldProps {
   disabled?: boolean;
 }
 
-export function SliderField({
-  name,
-  schema,
-  value,
-  onChange,
-  error,
-  disabled,
-}: SliderFieldProps) {
+export function SliderField({ name, schema, value, onChange, error, disabled }: SliderFieldProps) {
   const numSchema = schema as NumberSchemaProperty;
   const min = numSchema.minimum ?? 0;
   const max = numSchema.maximum ?? 100;
@@ -69,9 +62,7 @@ export function SliderField({
           className="w-20 h-7 text-sm text-right"
         />
       </div>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <div className="flex items-center space-x-2">
         <span className="text-xs text-muted-foreground w-8">{min}</span>
         <input

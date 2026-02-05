@@ -7,11 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import {
   type SchemaProperty,
@@ -96,16 +92,11 @@ export function ObjectArrayField({
   return (
     <div className="space-y-2">
       <Label>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <div className="space-y-2">
         {items.map((item, index) => (
           <Card key={index} className="overflow-hidden">
-            <Collapsible
-              open={expandedItems.has(index)}
-              onOpenChange={() => toggleExpanded(index)}
-            >
+            <Collapsible open={expandedItems.has(index)} onOpenChange={() => toggleExpanded(index)}>
               <CollapsibleTrigger asChild>
                 <div className="flex items-center justify-between p-3 cursor-pointer hover:bg-accent/50">
                   <div className="flex items-center gap-2">
@@ -143,7 +134,7 @@ export function ObjectArrayField({
                           <input
                             type="checkbox"
                             id={`${name}-${index}-${key}`}
-                            checked={item[key] as boolean ?? false}
+                            checked={(item[key] as boolean) ?? false}
                             onChange={(e) => updateItem(index, key, e.target.checked)}
                             disabled={disabled}
                             className="h-4 w-4"
@@ -157,7 +148,9 @@ export function ObjectArrayField({
                       ) : (
                         <Input
                           id={`${name}-${index}-${key}`}
-                          type={prop.type === "number" || prop.type === "integer" ? "number" : "text"}
+                          type={
+                            prop.type === "number" || prop.type === "integer" ? "number" : "text"
+                          }
                           value={item[key] !== undefined ? String(item[key]) : ""}
                           onChange={(e) => {
                             const rawValue = e.target.value;

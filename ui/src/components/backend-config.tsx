@@ -35,6 +35,10 @@ export function BackendConfig() {
     updateMcpTarget,
     parseAndUpdateUrl,
     updateMcpStateful,
+    // Security guard management
+    addSecurityGuard,
+    removeSecurityGuard,
+    updateSecurityGuardField,
   } = useBackendFormState();
 
   const {
@@ -145,6 +149,9 @@ export function BackendConfig() {
         updateMcpTarget={updateMcpTarget}
         parseAndUpdateUrl={parseAndUpdateUrl}
         updateMcpStateful={updateMcpStateful}
+        addSecurityGuard={addSecurityGuard}
+        removeSecurityGuard={removeSecurityGuard}
+        updateSecurityGuardField={updateSecurityGuardField}
       />
     </div>
   );

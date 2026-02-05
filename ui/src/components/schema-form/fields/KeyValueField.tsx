@@ -58,9 +58,7 @@ export function KeyValueField({
   return (
     <div className="space-y-2">
       <Label>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <div className="space-y-2">
         {entries.map(([key, val], index) => (
           <div key={index} className="flex items-center space-x-2">
@@ -79,11 +77,7 @@ export function KeyValueField({
               className="flex-1"
             />
             {!disabled && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => removeEntry(key)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => removeEntry(key)}>
                 <Trash2 className="h-4 w-4" />
               </Button>
             )}

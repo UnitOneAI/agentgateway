@@ -29,9 +29,7 @@ export function TextareaField({
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <Textarea
         id={name}
         value={value ?? ""}

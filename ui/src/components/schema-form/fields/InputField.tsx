@@ -15,14 +15,7 @@ interface InputFieldProps {
   disabled?: boolean;
 }
 
-export function InputField({
-  name,
-  schema,
-  value,
-  onChange,
-  error,
-  disabled,
-}: InputFieldProps) {
+export function InputField({ name, schema, value, onChange, error, disabled }: InputFieldProps) {
   const isNumber = schema.type === "number" || schema.type === "integer";
   const placeholder = schema["x-ui"]?.placeholder;
 
@@ -44,12 +37,8 @@ export function InputField({
 
   return (
     <div className="space-y-2">
-      <Label htmlFor={name}>
-        {schema.title || name}
-      </Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      <Label htmlFor={name}>{schema.title || name}</Label>
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <Input
         id={name}
         type={isNumber ? "number" : "text"}

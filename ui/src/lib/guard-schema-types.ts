@@ -84,12 +84,7 @@ export interface GuardMeta {
   icon?: string;
 }
 
-export type GuardPhase =
-  | "connection"
-  | "request"
-  | "response"
-  | "tools_list"
-  | "tool_invoke";
+export type GuardPhase = "connection" | "request" | "response" | "tools_list" | "tool_invoke";
 
 // =============================================================================
 // JSON Schema Types (Draft 2020-12 subset)
@@ -390,9 +385,7 @@ export function resolveWithDefaults(
 /**
  * Get properties sorted by UI order
  */
-export function getSortedProperties(
-  schema: GuardSettingsSchema
-): Array<[string, SchemaProperty]> {
+export function getSortedProperties(schema: GuardSettingsSchema): Array<[string, SchemaProperty]> {
   return Object.entries(schema.properties).sort(([, a], [, b]) => {
     const orderA = a["x-ui"]?.order ?? 999;
     const orderB = b["x-ui"]?.order ?? 999;

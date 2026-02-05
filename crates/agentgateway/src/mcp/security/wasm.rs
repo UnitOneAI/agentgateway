@@ -400,6 +400,71 @@ impl WasmGuard {
 
         result
     }
+
+    /// Call a no-argument WASM function that returns a string.
+    /// Used for get-settings-schema and get-default-config.
+    fn call_string_func(&self, func_name: &str) -> Result<String, GuardError> {
+        stacker::grow(8 * 1024 * 1024, || {
+            let linker = self.create_linker()?;
+            let state = WasmState::new(self.config.config.clone());
+            let mut store = Store::new(&self.engine, state);
+
+            let instance = linker
+                .instantiate(&mut store, &self.component)
+                .map_err(|e| GuardError::WasmError(format!("Failed to instantiate component: {}", e)))?;
+
+            let guard_export_idx = instance
+                .get_export(&mut store, None, "mcp:security-guard/guard@0.1.0")
+                .ok_or_else(|| {
+                    GuardError::WasmError(
+                        "Guard interface not found in component exports".to_string(),
+                    )
+                })?;
+
+            let func_export_idx = instance
+                .get_export(&mut store, Some(&guard_export_idx), func_name)
+                .ok_or_else(|| {
+                    GuardError::WasmError(format!(
+                        "Function {} not found in guard interface",
+                        func_name
+                    ))
+                })?;
+
+            let func = instance
+                .get_func(&mut store, &func_export_idx)
+                .ok_or_else(|| {
+                    GuardError::WasmError(
+                        "Could not get function from export index".to_string(),
+                    )
+                })?;
+
+            let mut results = vec![Val::Bool(false)]; // Placeholder
+            func.call(&mut store, &[], &mut results)
+                .map_err(|e| GuardError::WasmError(format!("WASM function call failed: {}", e)))?;
+
+            func.post_return(&mut store)
+                .map_err(|e| GuardError::WasmError(format!("WASM post-return failed: {}", e)))?;
+
+            match &results[0] {
+                Val::String(s) => Ok(s.to_string()),
+                other => Err(GuardError::WasmError(format!(
+                    "Expected string from {}, got: {:?}",
+                    func_name, other
+                ))),
+            }
+        })
+    }
+
+    /// Get the JSON Schema describing this guard's configurable parameters.
+    /// Returns JSON-serialized JSON Schema (Draft 2020-12).
+    pub fn get_settings_schema(&self) -> Result<String, GuardError> {
+        self.call_string_func("get-settings-schema")
+    }
+
+    /// Get the default configuration as JSON.
+    pub fn get_default_config(&self) -> Result<String, GuardError> {
+        self.call_string_func("get-default-config")
+    }
 }
 
 #[cfg(feature = "wasm-guards")]
@@ -649,6 +714,34 @@ impl NativeGuard for WasmGuard {
             server = %server_name,
             "WASM guard reset_server called (no-op)"
         );
+    }
+
+    fn get_settings_schema(&self) -> Option<String> {
+        match self.call_string_func("get-settings-schema") {
+            Ok(schema) => Some(schema),
+            Err(e) => {
+                tracing::warn!(
+                    guard_id = %self.guard_id,
+                    error = %e,
+                    "Failed to get settings schema from WASM guard"
+                );
+                None
+            }
+        }
+    }
+
+    fn get_default_config(&self) -> Option<String> {
+        match self.call_string_func("get-default-config") {
+            Ok(config) => Some(config),
+            Err(e) => {
+                tracing::warn!(
+                    guard_id = %self.guard_id,
+                    error = %e,
+                    "Failed to get default config from WASM guard"
+                );
+                None
+            }
+        }
     }
 }
 

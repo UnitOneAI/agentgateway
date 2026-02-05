@@ -269,10 +269,7 @@ interface UseGuardSchemasResult {
   getSchema: (guardType: string) => GuardSettingsSchema | undefined;
 
   /** Resolve config with defaults from schema */
-  resolveConfig: (
-    guardType: string,
-    config: Record<string, unknown>
-  ) => Record<string, unknown>;
+  resolveConfig: (guardType: string, config: Record<string, unknown>) => Record<string, unknown>;
 
   /** Refresh schemas from API */
   refresh: () => Promise<void>;
@@ -281,12 +278,10 @@ interface UseGuardSchemasResult {
 /**
  * Hook for accessing guard schemas
  *
- * @param fetchFromApi - Whether to fetch schemas from API (default: false, uses embedded)
+ * @param fetchFromApi - Whether to fetch schemas from API (default: true, fetches WASM guard schemas from backend)
  */
-export function useGuardSchemas(fetchFromApi = false): UseGuardSchemasResult {
-  const [schemas, setSchemas] = useState<Record<string, GuardSettingsSchema>>(
-    NATIVE_GUARD_SCHEMAS
-  );
+export function useGuardSchemas(fetchFromApi = true): UseGuardSchemasResult {
+  const [schemas, setSchemas] = useState<Record<string, GuardSettingsSchema>>(NATIVE_GUARD_SCHEMAS);
   const [loading, setLoading] = useState(fetchFromApi);
   const [error, setError] = useState<Error | null>(null);
 
@@ -342,16 +337,14 @@ export function useGuardSchemas(fetchFromApi = false): UseGuardSchemasResult {
     [schemas]
   );
 
-  const availableGuards: GuardTypeSummary[] = Object.entries(schemas).map(
-    ([type, schema]) => ({
-      type,
-      title: schema.title,
-      description: schema.description,
-      category: schema["x-guard-meta"]?.category || "detection",
-      icon: schema["x-guard-meta"]?.icon,
-      isWasm: !NATIVE_GUARD_SCHEMAS[type],
-    })
-  );
+  const availableGuards: GuardTypeSummary[] = Object.entries(schemas).map(([type, schema]) => ({
+    type,
+    title: schema.title,
+    description: schema.description,
+    category: schema["x-guard-meta"]?.category || "detection",
+    icon: schema["x-guard-meta"]?.icon,
+    isWasm: !NATIVE_GUARD_SCHEMAS[type],
+  }));
 
   return {
     schemas,

@@ -12,8 +12,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Bot, Zap, Settings } from "lucide-react";
+import { Loader2, Bot, Zap, Settings, RefreshCw } from "lucide-react";
 
 interface CapabilitiesListProps {
   connectionType: "mcp" | "a2a" | null;
@@ -25,6 +26,7 @@ interface CapabilitiesListProps {
   selectedA2aSkillId: string | null;
   onMcpToolSelect: (tool: McpTool) => void;
   onA2aSkillSelect: (skill: AgentSkill) => void;
+  onRefreshMcpTools?: () => void;
 }
 
 export function CapabilitiesList({
@@ -37,6 +39,7 @@ export function CapabilitiesList({
   selectedA2aSkillId,
   onMcpToolSelect,
   onA2aSkillSelect,
+  onRefreshMcpTools,
 }: CapabilitiesListProps) {
   const title = connectionType === "a2a" ? "Skills" : "Tools";
   const description = `Select a ${title.toLowerCase()} to use`;
@@ -53,6 +56,17 @@ export function CapabilitiesList({
             <Settings className="h-5 w-5" />
           )}
           {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
+          {connectionType === "mcp" && onRefreshMcpTools && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 ml-auto"
+              onClick={onRefreshMcpTools}
+              disabled={isLoading}
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+            </Button>
+          )}
         </CardTitle>
         <CardDescription>
           {connectionType === "a2a" ? a2aAgentCard?.description || "Unknown Agent" : description}

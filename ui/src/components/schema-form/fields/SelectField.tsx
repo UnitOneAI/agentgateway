@@ -10,7 +10,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type SchemaProperty, type StringSchemaProperty, type NumberSchemaProperty } from "@/lib/guard-schema-types";
+import {
+  type SchemaProperty,
+  type StringSchemaProperty,
+  type NumberSchemaProperty,
+} from "@/lib/guard-schema-types";
 
 interface SelectFieldProps {
   name: string;
@@ -21,14 +25,7 @@ interface SelectFieldProps {
   disabled?: boolean;
 }
 
-export function SelectField({
-  name,
-  schema,
-  value,
-  onChange,
-  error,
-  disabled,
-}: SelectFieldProps) {
+export function SelectField({ name, schema, value, onChange, error, disabled }: SelectFieldProps) {
   // Get enum values from schema
   const enumValues: (string | number)[] =
     schema.type === "string"
@@ -49,9 +46,7 @@ export function SelectField({
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <Select
         value={value !== undefined ? String(value) : undefined}
         onValueChange={handleChange}

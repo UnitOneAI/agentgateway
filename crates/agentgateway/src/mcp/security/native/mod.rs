@@ -94,6 +94,20 @@ pub trait NativeGuard: Send + Sync {
         // Default: no-op (most guards are stateless)
         let _ = server_name;
     }
+
+    /// Get JSON Schema describing this guard's configurable parameters.
+    /// Returns None for native guards (schemas are embedded in the UI).
+    /// WASM guards override this to call the guest module's get-settings-schema.
+    fn get_settings_schema(&self) -> Option<String> {
+        None
+    }
+
+    /// Get default configuration as JSON.
+    /// Returns None for native guards.
+    /// WASM guards override this to call the guest module's get-default-config.
+    fn get_default_config(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Helper: Build regex set from patterns

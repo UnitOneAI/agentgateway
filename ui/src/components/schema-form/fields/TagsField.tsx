@@ -18,14 +18,7 @@ interface TagsFieldProps {
   disabled?: boolean;
 }
 
-export function TagsField({
-  name,
-  schema,
-  value,
-  onChange,
-  error,
-  disabled,
-}: TagsFieldProps) {
+export function TagsField({ name, schema, value, onChange, error, disabled }: TagsFieldProps) {
   const [inputValue, setInputValue] = useState("");
   const items = Array.isArray(value) ? value : [];
   const placeholder = schema["x-ui"]?.placeholder || "Type and press Enter";
@@ -61,9 +54,7 @@ export function TagsField({
   return (
     <div className="space-y-2">
       <Label htmlFor={name}>{schema.title || name}</Label>
-      {schema.description && (
-        <p className="text-xs text-muted-foreground">{schema.description}</p>
-      )}
+      {schema.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
       <div className="space-y-2">
         {items.length > 0 && (
           <div className="flex flex-wrap gap-1">

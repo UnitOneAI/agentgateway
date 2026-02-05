@@ -14,11 +14,7 @@ import {
   getGroupedProperties,
 } from "@/lib/guard-schema-types";
 import { SchemaField } from "./SchemaField";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
@@ -65,8 +61,8 @@ export function SchemaForm({
   const sortedGroups = useMemo(() => {
     const groups = Array.from(groupedProperties.keys());
     return groups.sort((a, b) => {
-      const orderA = a ? groupDefs[a]?.order ?? 999 : 0;
-      const orderB = b ? groupDefs[b]?.order ?? 999 : 0;
+      const orderA = a ? (groupDefs[a]?.order ?? 999) : 0;
+      const orderB = b ? (groupDefs[b]?.order ?? 999) : 0;
       return orderA - orderB;
     });
   }, [groupedProperties, groupDefs]);
@@ -125,9 +121,7 @@ export function SchemaForm({
                 <div className="border-b pb-2">
                   <h4 className="text-sm font-medium">{groupDef.title}</h4>
                   {groupDef.description && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {groupDef.description}
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">{groupDef.description}</p>
                   )}
                 </div>
               )}

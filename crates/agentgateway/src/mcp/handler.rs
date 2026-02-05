@@ -65,60 +65,9 @@ impl Relay {
 		} else {
 			Some(backend.targets[0].name.to_string())
 		};
-		// Evaluate connection guards BEFORE establishing connections
-		// This allows blocking connections to malicious/unknown servers
-		for target in &backend.targets {
-			// Get server URL from backend (SimpleBackend uses hostport() method)
-			let server_url_string = target.backend.as_ref().map(|b| b.hostport());
-			let server_url = server_url_string.as_deref();
-			let context = crate::mcp::security::GuardContext {
-				server_name: target.name.to_string(),
-				identity: None,
-				metadata: serde_json::Value::Null,
-			};
-
-			match security_guards.evaluate_connection(&target.name, server_url, &context) {
-				Ok(crate::mcp::security::GuardDecision::Allow) => {
-					tracing::debug!(
-						target = %target.name,
-						"Connection guard allowed"
-					);
-				},
-				Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
-					tracing::warn!(
-						target = %target.name,
-						code = %reason.code,
-						message = %reason.message,
-						"Connection guard denied - blocking connection"
-					);
-					return Err(anyhow::anyhow!(
-						"Connection to {} blocked by security guard: {} - {}",
-						target.name,
-						reason.code,
-						reason.message
-					));
-				},
-				Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
-					// Modify not applicable for connection phase
-					tracing::debug!(
-						target = %target.name,
-						"Connection guard returned Modify (treating as Allow)"
-					);
-				},
-				Err(e) => {
-					tracing::error!(
-						target = %target.name,
-						error = %e,
-						"Connection guard error"
-					);
-					return Err(anyhow::anyhow!(
-						"Connection guard failed for {}: {}",
-						target.name,
-						e
-					));
-				},
-			}
-		}
+		// TODO: Evaluate connection guards BEFORE establishing connections.
+		// This requires wiring GuardExecutorRegistry into Relay::new().
+		// When integrated, guards will inspect each target and block malicious/unknown servers.
 
 		Ok(Self {
 			upstreams: Arc::new(upstream::UpstreamGroup::new(client, backend)?),

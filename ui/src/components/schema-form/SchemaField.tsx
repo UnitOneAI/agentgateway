@@ -2,10 +2,7 @@
  * SchemaField - Routes schema properties to appropriate field components
  */
 
-import {
-  type SchemaProperty,
-  inferUIComponent,
-} from "@/lib/guard-schema-types";
+import { type SchemaProperty, inferUIComponent } from "@/lib/guard-schema-types";
 import { InputField } from "./fields/InputField";
 import { CheckboxField } from "./fields/CheckboxField";
 import { SelectField } from "./fields/SelectField";
