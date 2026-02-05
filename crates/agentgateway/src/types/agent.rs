@@ -26,6 +26,7 @@ use crate::http::{
 	HeaderOrPseudo, HeaderValue, ext_authz, ext_proc, filters, remoteratelimit, retry, timeout,
 };
 use crate::mcp::McpAuthorization;
+use crate::mcp::security::McpSecurityGuard;
 use crate::telemetry::log::OrderedStringMap;
 use crate::types::discovery::{NamespacedHostname, Service};
 use crate::types::local::SimpleLocalBackend;
@@ -1091,6 +1092,9 @@ pub struct McpBackend {
 	pub targets: Vec<Arc<McpTarget>>,
 	pub stateful: bool,
 	pub always_use_prefix: bool,
+	/// Security guards to apply to this MCP backend
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub security_guards: Vec<McpSecurityGuard>,
 }
 
 impl McpBackend {

@@ -423,6 +423,7 @@ impl TestBind {
 				})],
 				stateful,
 				always_use_prefix: false,
+				security_guards: Vec::new(),
 			},
 		);
 		{
@@ -470,6 +471,7 @@ impl TestBind {
 					.collect_vec(),
 				stateful,
 				always_use_prefix: false,
+				security_guards: Vec::new(),
 			},
 		);
 		{

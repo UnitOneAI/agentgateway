@@ -16,7 +16,7 @@ use crate::*;
 pub mod webhook;
 
 mod moderation;
-mod pii;
+pub mod pii;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

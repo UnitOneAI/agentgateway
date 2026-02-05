@@ -32,6 +32,34 @@ export const DEFAULT_BACKEND_FORM = {
     schema: boolean;
   }>,
   mcpStateful: true,
+  // Security guards for MCP backend (UnitOne Extension)
+  securityGuards: [] as Array<{
+    id: string;
+    description?: string;
+    priority?: number;
+    failureMode?: "fail_closed" | "fail_open";
+    timeoutMs?: number;
+    runsOn?: Array<"request" | "response" | "tools_list" | "tool_invoke">;
+    enabled?: boolean;
+    type: "tool_poisoning" | "rug_pull" | "tool_shadowing" | "server_whitelist" | "pii" | "wasm";
+    // Type-specific config
+    strictMode?: boolean;
+    customPatterns?: string[];
+    alertThreshold?: number;
+    scanFields?: string[];
+    changeThreshold?: number;
+    monitoredChangeTypes?: string[];
+    updateBaseline?: boolean;
+    shadowingPatterns?: string[];
+    allowedServers?: string[];
+    detect?: Array<"email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url">;
+    action?: "mask" | "reject";
+    minScore?: number;
+    rejectionMessage?: string;
+    modulePath?: string;
+    maxMemory?: number;
+    config?: Record<string, unknown>;
+  }>,
   // AI backend fields
   aiProvider: "openAI" as "openAI" | "gemini" | "vertex" | "anthropic" | "bedrock" | "azureOpenAI",
   aiModel: "",

@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use super::NativeGuard;
 use crate::mcp::security::{DenyReason, GuardContext, GuardDecision, GuardResult, ModifyAction};
-use crate::pii;
+use crate::llm::policy::pii;
 
 // Re-export PiiType from the shared pii module
-pub use crate::pii::PiiType;
+pub use crate::llm::policy::pii::PiiType;
 
 /// Action to take when PII is detected
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

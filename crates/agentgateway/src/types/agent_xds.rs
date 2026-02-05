@@ -736,6 +736,8 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 						proto::agent::mcp_backend::PrefixMode::Always => true,
 						proto::agent::mcp_backend::PrefixMode::Conditional => false,
 					},
+					// Security guards are not yet supported in XDS proto
+					security_guards: Vec::new(),
 				},
 			),
 			None => {

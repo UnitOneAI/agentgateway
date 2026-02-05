@@ -485,15 +485,52 @@ export const createMcpTarget = (target: any) => {
 
 export const createMcpBackend = (form: typeof DEFAULT_BACKEND_FORM, weight: number): Backend => {
   const targets = form.mcpTargets.map(createMcpTarget);
-  return addWeightIfNeeded(
-    {
-      mcp: {
-        targets, // Flat structure for local config format
-        statefulMode: form.mcpStateful ? McpStatefulMode.STATEFUL : McpStatefulMode.STATELESS,
-      },
-    },
-    weight
-  );
+  const mcpConfig: any = {
+    targets, // Flat structure for local config format
+    statefulMode: form.mcpStateful ? McpStatefulMode.STATEFUL : McpStatefulMode.STATELESS,
+  };
+
+  // Add security guards if configured (UnitOne Extension)
+  if (form.securityGuards && form.securityGuards.length > 0) {
+    mcpConfig.securityGuards = form.securityGuards.map((guard) => {
+      // Convert camelCase form fields to snake_case for YAML config
+      const guardConfig: any = {
+        id: guard.id,
+        type: guard.type,
+      };
+
+      // Add optional common fields if present
+      if (guard.description) guardConfig.description = guard.description;
+      if (guard.priority !== undefined) guardConfig.priority = guard.priority;
+      if (guard.failureMode) guardConfig.failure_mode = guard.failureMode;
+      if (guard.timeoutMs !== undefined) guardConfig.timeout_ms = guard.timeoutMs;
+      if (guard.runsOn && guard.runsOn.length > 0) guardConfig.runs_on = guard.runsOn;
+      if (guard.enabled !== undefined) guardConfig.enabled = guard.enabled;
+
+      // Add type-specific config fields
+      if (guard.strictMode !== undefined) guardConfig.strict_mode = guard.strictMode;
+      if (guard.customPatterns) guardConfig.custom_patterns = guard.customPatterns;
+      if (guard.alertThreshold !== undefined) guardConfig.alert_threshold = guard.alertThreshold;
+      if (guard.scanFields) guardConfig.scan_fields = guard.scanFields;
+      if (guard.changeThreshold !== undefined) guardConfig.change_threshold = guard.changeThreshold;
+      if (guard.monitoredChangeTypes)
+        guardConfig.monitored_change_types = guard.monitoredChangeTypes;
+      if (guard.updateBaseline !== undefined) guardConfig.update_baseline = guard.updateBaseline;
+      if (guard.shadowingPatterns) guardConfig.shadowing_patterns = guard.shadowingPatterns;
+      if (guard.allowedServers) guardConfig.allowed_servers = guard.allowedServers;
+      if (guard.detect) guardConfig.detect = guard.detect;
+      if (guard.action) guardConfig.action = guard.action;
+      if (guard.minScore !== undefined) guardConfig.min_score = guard.minScore;
+      if (guard.rejectionMessage) guardConfig.rejection_message = guard.rejectionMessage;
+      if (guard.modulePath) guardConfig.module_path = guard.modulePath;
+      if (guard.maxMemory !== undefined) guardConfig.max_memory = guard.maxMemory;
+      if (guard.config) guardConfig.config = guard.config;
+
+      return guardConfig;
+    });
+  }
+
+  return addWeightIfNeeded({ mcp: mcpConfig }, weight);
 };
 
 export const createAiProviderConfig = (form: typeof DEFAULT_BACKEND_FORM) => {
@@ -726,6 +763,34 @@ export const populateFormFromBackend = (
       return baseTarget;
     }),
     mcpStateful: backend.mcp?.statefulMode !== McpStatefulMode.STATELESS, // Default to stateful if not specified
+    // Security guards (UnitOne Extension)
+    securityGuards: (backend.mcp?.securityGuards || []).map((guard: any) => ({
+      id: guard.id || "",
+      description: guard.description,
+      priority: guard.priority,
+      failureMode: guard.failure_mode || guard.failureMode,
+      timeoutMs: guard.timeout_ms || guard.timeoutMs,
+      runsOn: guard.runs_on || guard.runsOn || [],
+      enabled: guard.enabled,
+      type: guard.type || "tool_poisoning",
+      // Type-specific config
+      strictMode: guard.strict_mode || guard.strictMode,
+      customPatterns: guard.custom_patterns || guard.customPatterns,
+      alertThreshold: guard.alert_threshold || guard.alertThreshold,
+      scanFields: guard.scan_fields || guard.scanFields,
+      changeThreshold: guard.change_threshold || guard.changeThreshold,
+      monitoredChangeTypes: guard.monitored_change_types || guard.monitoredChangeTypes,
+      updateBaseline: guard.update_baseline || guard.updateBaseline,
+      shadowingPatterns: guard.shadowing_patterns || guard.shadowingPatterns,
+      allowedServers: guard.allowed_servers || guard.allowedServers,
+      detect: guard.detect,
+      action: guard.action,
+      minScore: guard.min_score || guard.minScore,
+      rejectionMessage: guard.rejection_message || guard.rejectionMessage,
+      modulePath: guard.module_path || guard.modulePath,
+      maxMemory: guard.max_memory || guard.maxMemory,
+      config: guard.config,
+    })),
     // AI backend
     aiProvider:
       (getAiProviderType(backend) as

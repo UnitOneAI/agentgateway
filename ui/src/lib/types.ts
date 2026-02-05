@@ -300,7 +300,90 @@ export interface McpBackend {
   name?: string;
   targets: McpTarget[];
   statefulMode?: McpStatefulMode;
+  // Security guards to apply to this MCP backend
+  securityGuards?: McpSecurityGuard[];
 }
+
+// ===========================================
+// Security Guards Types (UnitOne Extension)
+// ===========================================
+
+/// Security guard that can be applied to MCP protocol operations
+export interface McpSecurityGuard {
+  /// Unique identifier for this guard
+  id: string;
+
+  /// Human-readable description
+  description?: string;
+
+  /// Execution priority (lower = runs first)
+  priority?: number;
+
+  /// Behavior when guard fails to execute
+  failureMode?: FailureMode;
+
+  /// Maximum time allowed for guard execution (ms)
+  timeoutMs?: number;
+
+  /// Which phases this guard runs on
+  runsOn?: GuardPhase[];
+
+  /// Whether guard is enabled
+  enabled?: boolean;
+
+  /// The specific guard implementation type and config
+  type: GuardType;
+
+  // Type-specific config (flattened)
+  // Tool Poisoning config
+  strictMode?: boolean;
+  customPatterns?: string[];
+  alertThreshold?: number;
+  scanFields?: string[];
+
+  // Rug Pull config
+  changeThreshold?: number;
+  monitoredChangeTypes?: string[];
+  updateBaseline?: boolean;
+
+  // Tool Shadowing config
+  shadowingPatterns?: string[];
+
+  // Server Whitelist config
+  allowedServers?: string[];
+
+  // PII config
+  detect?: PiiType[];
+  action?: PiiAction;
+  minScore?: number;
+  rejectionMessage?: string;
+
+  // WASM config
+  modulePath?: string;
+  maxMemory?: number;
+  config?: Record<string, unknown>;
+}
+
+/// Guard implementation types
+export type GuardType =
+  | "tool_poisoning"
+  | "rug_pull"
+  | "tool_shadowing"
+  | "server_whitelist"
+  | "pii"
+  | "wasm";
+
+/// Execution phase for guards
+export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
+
+/// How to behave when guard execution fails
+export type FailureMode = "fail_closed" | "fail_open";
+
+/// PII types that can be detected
+export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
+
+/// Action to take when PII is detected
+export type PiiAction = "mask" | "reject";
 
 // UI-friendly flat structure (matches local config format for write path)
 export interface AiBackend {

@@ -16,6 +16,7 @@ use crate::http::transformation_cel::LocalTransformationConfig;
 use crate::http::{filters, retry, timeout};
 use crate::llm::{AIBackend, AIProvider, NamedAIProvider};
 use crate::mcp::McpAuthorization;
+use crate::mcp::security::McpSecurityGuard;
 use crate::store::LocalWorkload;
 use crate::types::agent::{
 	A2aPolicy, Authorization, Backend, BackendKey, BackendPolicy, BackendReference,
@@ -398,6 +399,7 @@ impl LocalBackend {
 						McpPrefixMode::Always => true,
 						McpPrefixMode::Conditional => false,
 					}),
+					security_guards: tgt.security_guards.clone(),
 				};
 				backends.push(Backend::MCP(name, m).into());
 				backends
@@ -452,6 +454,9 @@ pub struct LocalMcpBackend {
 	pub stateful_mode: McpStatefulMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub prefix_mode: Option<McpPrefixMode>,
+	/// Security guards to apply to this MCP backend
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub security_guards: Vec<McpSecurityGuard>,
 }
 
 #[apply(schema_de!)]
