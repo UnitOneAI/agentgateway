@@ -47,6 +47,15 @@ interface guard {
     /// Evaluate server connection before establishing
     /// Called by the host before connecting to an MCP server
     evaluate-server-connection: func(context: guard-context) -> result<decision, string>;
+
+    /// Get JSON Schema describing guard's configurable parameters
+    /// Returns JSON-serialized JSON Schema (Draft 2020-12)
+    /// Schema describes guard-specific settings only (not common settings like priority, timeout)
+    get-settings-schema: func() -> string;
+
+    /// Get default configuration as JSON
+    /// Returns JSON-serialized default config values
+    get-default-config: func() -> string;
 }
 
 /// Host interface - functions provided by AgentGateway to the WASM module

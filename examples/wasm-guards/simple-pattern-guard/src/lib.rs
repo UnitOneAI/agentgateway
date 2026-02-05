@@ -88,6 +88,69 @@ impl Guest for SimplePatternGuard {
         log_info("All tools passed pattern check");
         Ok(Decision::Allow)
     }
+
+    fn evaluate_server_connection(context: GuardContext) -> Result<Decision, String> {
+        // This guard focuses on tool patterns, so we allow all connections
+        log_info(&format!(
+            "Allowing connection to server '{}'",
+            context.server_name
+        ));
+        Ok(Decision::Allow)
+    }
+
+    fn get_settings_schema() -> String {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "agentgateway://guards/simple-pattern/v1",
+            "title": "Simple Pattern Guard",
+            "description": "Blocks tools matching configurable patterns in name or description",
+            "type": "object",
+            "properties": {
+                "blocked_patterns": {
+                    "type": "array",
+                    "title": "Blocked Patterns",
+                    "description": "List of substrings to block (case-insensitive)",
+                    "items": { "type": "string" },
+                    "default": ["delete", "rm -rf", "drop table", "eval", "exec"],
+                    "x-ui": {
+                        "component": "tags",
+                        "placeholder": "Enter pattern and press Enter",
+                        "order": 1
+                    }
+                },
+                "scan_descriptions": {
+                    "type": "boolean",
+                    "title": "Scan Descriptions",
+                    "description": "Also check tool descriptions for blocked patterns",
+                    "default": true,
+                    "x-ui": { "order": 2 }
+                },
+                "max_tool_count": {
+                    "type": "integer",
+                    "title": "Max Tool Count",
+                    "description": "Maximum allowed tools per server (0 = unlimited)",
+                    "default": 0,
+                    "minimum": 0,
+                    "x-ui": { "order": 3, "advanced": true }
+                }
+            },
+            "x-guard-meta": {
+                "guardType": "simple_pattern",
+                "version": "1.0.0",
+                "category": "detection",
+                "defaultRunsOn": ["tools_list"],
+                "icon": "filter"
+            }
+        }).to_string()
+    }
+
+    fn get_default_config() -> String {
+        serde_json::json!({
+            "blocked_patterns": ["delete", "rm -rf", "drop table", "eval", "exec"],
+            "scan_descriptions": true,
+            "max_tool_count": 0
+        }).to_string()
+    }
 }
 
 // Helper: Get blocked patterns from config or use defaults
