@@ -300,90 +300,8 @@ export interface McpBackend {
   name?: string;
   targets: McpTarget[];
   statefulMode?: McpStatefulMode;
-  // Security guards to apply to this MCP backend
-  securityGuards?: McpSecurityGuard[];
+  securityGuards?: SecurityGuard[];
 }
-
-// ===========================================
-// Security Guards Types (UnitOne Extension)
-// ===========================================
-
-/// Security guard that can be applied to MCP protocol operations
-export interface McpSecurityGuard {
-  /// Unique identifier for this guard
-  id: string;
-
-  /// Human-readable description
-  description?: string;
-
-  /// Execution priority (lower = runs first)
-  priority?: number;
-
-  /// Behavior when guard fails to execute
-  failureMode?: FailureMode;
-
-  /// Maximum time allowed for guard execution (ms)
-  timeoutMs?: number;
-
-  /// Which phases this guard runs on
-  runsOn?: GuardPhase[];
-
-  /// Whether guard is enabled
-  enabled?: boolean;
-
-  /// The specific guard implementation type and config
-  type: GuardType;
-
-  // Type-specific config (flattened)
-  // Tool Poisoning config
-  strictMode?: boolean;
-  customPatterns?: string[];
-  alertThreshold?: number;
-  scanFields?: string[];
-
-  // Rug Pull config
-  changeThreshold?: number;
-  monitoredChangeTypes?: string[];
-  updateBaseline?: boolean;
-
-  // Tool Shadowing config
-  shadowingPatterns?: string[];
-
-  // Server Whitelist config
-  allowedServers?: string[];
-
-  // PII config
-  detect?: PiiType[];
-  action?: PiiAction;
-  minScore?: number;
-  rejectionMessage?: string;
-
-  // WASM config
-  modulePath?: string;
-  maxMemory?: number;
-  config?: Record<string, unknown>;
-}
-
-/// Guard implementation types
-export type GuardType =
-  | "tool_poisoning"
-  | "rug_pull"
-  | "tool_shadowing"
-  | "server_whitelist"
-  | "pii"
-  | "wasm";
-
-/// Execution phase for guards
-export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
-
-/// How to behave when guard execution fails
-export type FailureMode = "fail_closed" | "fail_open";
-
-/// PII types that can be detected
-export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
-
-/// Action to take when PII is detected
-export type PiiAction = "mask" | "reject";
 
 // UI-friendly flat structure (matches local config format for write path)
 export interface AiBackend {
@@ -574,3 +492,99 @@ export type PlaygroundListener = z.infer<typeof PlaygroundListenerSchema>;
 export interface ListenerInfo extends Listener {
   displayEndpoint: string;
 }
+
+// =============================================================================
+// Security Guards Types
+// =============================================================================
+
+// Guard phase types (matches Rust GuardPhase enum)
+export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
+
+// Failure mode (matches Rust FailureMode enum)
+export type FailureMode = "fail_closed" | "fail_open";
+
+// Guard types (matches Rust McpGuardKind enum)
+export type SecurityGuardType =
+  | "tool_poisoning"
+  | "rug_pull"
+  | "tool_shadowing"
+  | "server_whitelist"
+  | "pii"
+  | "wasm";
+
+// PII types (matches Rust PiiType enum)
+export type PiiType = "email" | "phone_number" | "ssn" | "credit_card" | "ca_sin" | "url";
+
+// PII action (matches Rust PiiAction enum)
+export type PiiAction = "mask" | "reject";
+
+// Scan fields for tool poisoning
+export type ScanField = "name" | "description" | "input_schema";
+
+// Base security guard interface (common fields)
+export interface SecurityGuardBase {
+  id: string;
+  description?: string;
+  enabled: boolean;
+  priority: number;
+  timeout_ms: number;
+  failure_mode: FailureMode;
+  runs_on: GuardPhase[];
+}
+
+// Tool Poisoning config
+export interface ToolPoisoningGuard extends SecurityGuardBase {
+  type: "tool_poisoning";
+  strict_mode: boolean;
+  custom_patterns: string[];
+  scan_fields: ScanField[];
+  alert_threshold: number;
+}
+
+// Rug Pull config
+export interface RugPullGuard extends SecurityGuardBase {
+  type: "rug_pull";
+  risk_threshold: number;
+}
+
+// Tool Shadowing config
+export interface ToolShadowingGuard extends SecurityGuardBase {
+  type: "tool_shadowing";
+  block_duplicates: boolean;
+  protected_names: string[];
+}
+
+// Server Whitelist config
+export interface ServerWhitelistGuard extends SecurityGuardBase {
+  type: "server_whitelist";
+  allowed_servers: string[];
+  detect_typosquats: boolean;
+  similarity_threshold: number;
+}
+
+// PII Guard config
+export interface PiiGuard extends SecurityGuardBase {
+  type: "pii";
+  detect: PiiType[];
+  action: PiiAction;
+  min_score: number;
+  rejection_message?: string;
+}
+
+// WASM Guard config (for custom WebAssembly guards)
+export interface WasmGuard extends SecurityGuardBase {
+  type: "wasm";
+  module_path: string;
+  max_memory_bytes: number;
+  max_fuel: number;
+  config: Record<string, unknown>;
+}
+
+// Union type for all security guards
+export type SecurityGuard =
+  | ToolPoisoningGuard
+  | RugPullGuard
+  | ToolShadowingGuard
+  | ServerWhitelistGuard
+  | PiiGuard
+  | WasmGuard;

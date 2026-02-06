@@ -7,17 +7,18 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use super::native::NativeGuard;
-use super::{DenyReason, GuardContext, GuardDecision, GuardError, GuardResult, ModifyAction};
 
 #[cfg(feature = "wasm-guards")]
-use wasmtime::component::{Component, Linker, Val};
-#[cfg(feature = "wasm-guards")]
-use wasmtime::{Config, Engine, Store};
-#[cfg(feature = "wasm-guards")]
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
+use {
+    std::time::{Duration, SystemTime, UNIX_EPOCH},
+    super::native::NativeGuard,
+    super::{DenyReason, GuardContext, GuardDecision, GuardResult, ModifyAction},
+    wasmtime::component::{Component, Linker, Val},
+    wasmtime::{Config, Engine, Store},
+    wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView},
+};
+
+use super::{GuardError};
 
 /// Configuration for WASM-based guards
 #[derive(Debug, Clone, Serialize, Deserialize)]

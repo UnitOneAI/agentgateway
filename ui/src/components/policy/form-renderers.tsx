@@ -11,9 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, Wand2 } from "lucide-react";
 import { formatArrayForInput, handleNumberArrayInput } from "@/lib/policy-utils";
 import { McpAuthorizationRule } from "@/lib/types";
+import { MCP_CORS_DEFAULTS } from "@/lib/policy-defaults";
 import {
   ArrayInput,
   TargetInput,
@@ -86,15 +87,31 @@ export function renderJwtAuthForm({ data, onChange }: FormRendererProps) {
 }
 
 export function renderCorsForm({ data, onChange }: FormRendererProps) {
+  const applyMcpDefaults = () => {
+    onChange({ ...MCP_CORS_DEFAULTS });
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center space-x-2">
-        <Checkbox
-          id="allowCredentials"
-          checked={data.allowCredentials || false}
-          onCheckedChange={(checked: boolean) => onChange({ ...data, allowCredentials: checked })}
-        />
-        <Label htmlFor="allowCredentials">Allow Credentials</Label>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="allowCredentials"
+            checked={data.allowCredentials || false}
+            onCheckedChange={(checked: boolean) => onChange({ ...data, allowCredentials: checked })}
+          />
+          <Label htmlFor="allowCredentials">Allow Credentials</Label>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={applyMcpDefaults}
+          className="flex items-center gap-2"
+        >
+          <Wand2 className="h-4 w-4" />
+          Set MCP Defaults
+        </Button>
       </div>
 
       <ArrayInput
