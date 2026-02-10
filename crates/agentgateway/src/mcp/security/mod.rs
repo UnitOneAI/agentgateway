@@ -388,6 +388,12 @@ impl GuardExecutor {
 		}
 	}
 
+	/// Returns true if any guards are configured
+	pub fn has_guards(&self) -> bool {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		!guards.is_empty()
+	}
+
 	/// Update guards with new configuration (hot-reload support)
 	/// This replaces all guards atomically
 	pub fn update(&self, configs: Vec<McpSecurityGuard>) -> Result<(), GuardError> {

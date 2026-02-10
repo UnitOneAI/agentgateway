@@ -15,6 +15,7 @@ pub use discovery::{
 	LocalWorkload, PreviousState as DiscoveryPreviousState, Store as DiscoveryStore, WorkloadStore,
 };
 
+use crate::mcp::security::GuardExecutorRegistry;
 use crate::store;
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,7 @@ pub enum Event<T> {
 pub struct Stores {
 	pub discovery: discovery::StoreUpdater,
 	pub binds: binds::StoreUpdater,
+	pub guard_registry: GuardExecutorRegistry,
 }
 
 impl Default for Stores {
@@ -40,6 +42,7 @@ impl Stores {
 		Stores {
 			discovery: discovery::StoreUpdater::new(Arc::new(RwLock::new(discovery::Store::new()))),
 			binds: binds::StoreUpdater::new(Arc::new(RwLock::new(binds::Store::new()))),
+			guard_registry: GuardExecutorRegistry::new(),
 		}
 	}
 	pub fn read_binds(&self) -> std::sync::RwLockReadGuard<'_, store::BindStore> {

@@ -35,7 +35,6 @@ pub enum PiiAction {
 /// Configuration for PII Guard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
 pub struct PiiGuardConfig {
 	/// Which PII types to detect (defaults to all)
 	#[serde(default = "default_pii_types")]
@@ -115,10 +114,25 @@ impl PiiGuard {
 			return text.to_string();
 		}
 
-		// Filter out overlapping results (keep first match when overlapping)
-		// Results are already sorted in reverse order (end to start)
+		// Sort by score descending so higher-confidence matches win overlap resolution.
+		// This prevents e.g. a URL match on "example.com" (score 0.5) from beating
+		// an email match on "user@example.com" (score 0.85).
+		let mut sorted_results: Vec<&pii::RecognizerResult> = results.iter().collect();
+		sorted_results.sort_by(|a, b| {
+			b.score
+				.partial_cmp(&a.score)
+				.unwrap_or(std::cmp::Ordering::Equal)
+				.then_with(|| {
+					// For equal scores, prefer longer matches
+					let a_len = a.end.saturating_sub(a.start);
+					let b_len = b.end.saturating_sub(b.start);
+					b_len.cmp(&a_len)
+				})
+		});
+
+		// Greedily select non-overlapping results (highest score first)
 		let mut non_overlapping: Vec<&pii::RecognizerResult> = Vec::new();
-		for result in results {
+		for result in &sorted_results {
 			// Validate byte indices are within bounds and at char boundaries
 			if result.start > text.len()
 				|| result.end > text.len()
@@ -128,9 +142,7 @@ impl PiiGuard {
 				continue;
 			}
 
-			// Check for overlap with already selected results
 			let overlaps = non_overlapping.iter().any(|existing| {
-				// Since results are sorted in reverse, existing results start after current
 				result.end > existing.start && result.start < existing.end
 			});
 
@@ -139,7 +151,10 @@ impl PiiGuard {
 			}
 		}
 
-		// Build new string with replacements (processing from end to start)
+		// Sort by position (reverse order) for safe replacement from end to start
+		non_overlapping.sort_by(|a, b| b.start.cmp(&a.start));
+
+		// Build new string with replacements
 		let mut masked = text.to_string();
 		for result in non_overlapping {
 			masked.replace_range(
@@ -339,9 +354,28 @@ impl NativeGuard for PiiGuard {
 				"PiiGuard::evaluate_tool_invoke called"
 		);
 
-		let result = self.evaluate_json(arguments, context);
-		tracing::info!(result = ?result, "PiiGuard::evaluate_tool_invoke result");
-		result
+		match self.config.action {
+			PiiAction::Reject => {
+				// For reject mode, check arguments and deny if PII found
+				let result = self.evaluate_json(arguments, context);
+				tracing::info!(result = ?result, "PiiGuard::evaluate_tool_invoke result");
+				result
+			},
+			PiiAction::Mask => {
+				// For mask mode, allow the tool invocation to proceed.
+				// Masking arguments would break the MCP server (it needs real values).
+				// PII masking will happen on the RESPONSE path instead.
+				let detections = self.collect_detections(arguments);
+				if !detections.is_empty() {
+					tracing::info!(
+						tool = %tool_name,
+						detection_count = detections.len(),
+						"PII detected in tool arguments (mask mode) - allowing through, will mask response"
+					);
+				}
+				Ok(GuardDecision::Allow)
+			},
+		}
 	}
 
 	fn evaluate_request(&self, request: &serde_json::Value, context: &GuardContext) -> GuardResult {
@@ -762,7 +796,8 @@ rejection_message: "PII not allowed in MCP requests"
 	}
 
 	#[test]
-	fn test_tool_invoke_evaluation() {
+	fn test_tool_invoke_mask_allows_through() {
+		// With mask action, tool_invoke should Allow (masking happens on response)
 		let config = PiiGuardConfig {
 			detect: vec![PiiType::Email, PiiType::Ssn],
 			action: PiiAction::Mask,
@@ -780,25 +815,11 @@ rejection_message: "PII not allowed in MCP requests"
 		});
 
 		let result = guard.evaluate_tool_invoke("search_tool", &arguments, &context);
-
-		match result {
-			Ok(GuardDecision::Modify(ModifyAction::Transform(masked))) => {
-				assert!(
-					masked["user_email"].as_str().unwrap().contains("<EMAIL_ADDRESS>"),
-					"Expected email to be masked"
-				);
-				assert!(
-					masked["ssn"].as_str().unwrap().contains("<SSN>"),
-					"Expected SSN to be masked"
-				);
-				assert_eq!(
-					masked["query"].as_str().unwrap(),
-					"find user data",
-					"Non-PII field should not be modified"
-				);
-			},
-			other => panic!("Expected Modify decision, got {:?}", other),
-		}
+		assert!(
+			matches!(result, Ok(GuardDecision::Allow)),
+			"With mask action, tool_invoke should Allow (masking on response path). Got {:?}",
+			result
+		);
 	}
 
 	#[test]
