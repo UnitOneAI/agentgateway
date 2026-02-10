@@ -223,14 +223,6 @@ impl Session {
 							)
 							.await;
 
-						// Spawn background task to establish security baselines
-						// This fetches tools/list from all upstreams to create initial baselines
-						// for rug pull detection without blocking the initialize response
-						let relay = self.relay.clone();
-						tokio::spawn(async move {
-							relay.establish_security_baselines(ctx).await;
-						});
-
 						if let Some(sessions) = self.relay.get_sessions() {
 							let s = http::sessionpersistence::SessionState::MCP(
 								http::sessionpersistence::MCPSessionState { sessions },
@@ -447,6 +439,10 @@ impl Session {
 				}
 			},
 			ClientJsonRpcMessage::Notification(r) => {
+				let is_initialized = matches!(
+					&r.notification,
+					ClientNotification::InitializedNotification(_)
+				);
 				let method = match &r.notification {
 					ClientNotification::CancelledNotification(r) => r.method.as_str(),
 					ClientNotification::ProgressNotification(r) => r.method.as_str(),
@@ -463,7 +459,20 @@ impl Session {
 				});
 				// TODO: the notification needs to be fanned out in some cases and sent to a single one in others
 				// however, we don't have a way to map to the correct service yet
-				self.relay.send_notification(r, ctx).await
+				let res = self.relay.send_notification(r, ctx.clone()).await;
+
+				// After the initialized notification has been forwarded upstream,
+				// spawn background task to establish security baselines.
+				// This must happen after initialized (not after initialize) to
+				// avoid sending tools/list before the upstream session is ready.
+				if is_initialized {
+					let relay = self.relay.clone();
+					tokio::spawn(async move {
+						relay.establish_security_baselines(ctx).await;
+					});
+				}
+
+				res
 			},
 
 			_ => Err(UpstreamError::InvalidRequest(
