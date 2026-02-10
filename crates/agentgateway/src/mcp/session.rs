@@ -321,12 +321,17 @@ impl Session {
 						}
 
 						// Evaluate security guards on tool invocation
-						let arguments_value = ctr.params.arguments
+						let arguments_value = ctr
+							.params
+							.arguments
 							.as_ref()
 							.map(|m| serde_json::Value::Object(m.clone()))
 							.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-						match self.relay.evaluate_tool_invoke(tool, &arguments_value, service_name, None) {
+						match self
+							.relay
+							.evaluate_tool_invoke(tool, &arguments_value, service_name, None)
+						{
 							Ok(mcp::security::GuardDecision::Allow) => {
 								// Continue with the request
 							},
@@ -342,7 +347,9 @@ impl Session {
 									message: reason.message,
 								});
 							},
-							Ok(mcp::security::GuardDecision::Modify(mcp::security::ModifyAction::Transform(modified))) => {
+							Ok(mcp::security::GuardDecision::Modify(mcp::security::ModifyAction::Transform(
+								modified,
+							))) => {
 								// Apply the modified arguments
 								if let serde_json::Value::Object(map) = modified {
 									ctr.params.arguments = Some(map);
@@ -364,7 +371,10 @@ impl Session {
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
 						// Use guarded send to evaluate responses for PII and other security checks
-						self.relay.send_single_guarded(r, ctx, service_name, true, None).await
+						self
+							.relay
+							.send_single_guarded(r, ctx, service_name, true, None)
+							.await
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();

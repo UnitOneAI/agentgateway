@@ -149,7 +149,9 @@ impl Relay {
 			identity,
 			metadata: serde_json::Value::Null,
 		};
-		self.security_guards.evaluate_tool_invoke(tool_name, arguments, &context)
+		self
+			.security_guards
+			.evaluate_tool_invoke(tool_name, arguments, &context)
 	}
 
 	/// Reset security guard state for all upstream servers (called on session re-initialization)
@@ -286,7 +288,10 @@ impl Relay {
 							"Security guard denied tools list for server"
 						);
 						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
-							"Security guard denied for server '{}': {} - {}", server_name, reason.code, reason.message
+							"Security guard denied for server '{}': {} - {}",
+							server_name,
+							reason.code,
+							reason.message
 						)));
 					},
 					Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
@@ -303,7 +308,9 @@ impl Relay {
 							"Security guard execution failed"
 						);
 						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
-							"Security guard failed for server '{}': {}", server_name, e
+							"Security guard failed for server '{}': {}",
+							server_name,
+							e
 						)));
 					},
 				}
@@ -488,7 +495,9 @@ impl Relay {
 		ctx: IncomingRequestContext,
 		service_name: &str,
 	) -> Result<Response, UpstreamError> {
-		self.send_single_guarded(r, ctx, service_name, false, None).await
+		self
+			.send_single_guarded(r, ctx, service_name, false, None)
+			.await
 	}
 
 	/// Send a single request with optional response guard evaluation
@@ -524,13 +533,19 @@ impl Relay {
 			match result {
 				Ok(msg) => {
 					// Try to evaluate the response through guards
-					match evaluate_server_message(&msg, &guards, &server_name, identity_clone.clone(), request_id.clone()) {
+					match evaluate_server_message(
+						&msg,
+						&guards,
+						&server_name,
+						identity_clone.clone(),
+						request_id.clone(),
+					) {
 						Ok(modified_msg) => Ok(modified_msg),
 						Err(e) => {
 							tracing::warn!(error = %e, "Guard evaluation failed on response");
 							// On guard error, return original message (fail-open for responses)
 							Ok(msg)
-						}
+						},
 					}
 				},
 				Err(e) => Err(e),
@@ -681,8 +696,8 @@ fn evaluate_server_message(
 	request_id: RequestId,
 ) -> Result<ServerJsonRpcMessage, String> {
 	// Convert message to JSON for guard evaluation
-	let json_value = serde_json::to_value(msg)
-		.map_err(|e| format!("Failed to serialize message: {}", e))?;
+	let json_value =
+		serde_json::to_value(msg).map_err(|e| format!("Failed to serialize message: {}", e))?;
 
 	let context = crate::mcp::security::GuardContext {
 		server_name: server_name.to_string(),
@@ -704,11 +719,17 @@ fn evaluate_server_message(
 			);
 			// Return an error message with the correct request ID
 			Ok(ServerJsonRpcMessage::error(
-				ErrorData::new(rmcp::model::ErrorCode(-32001), format!("Security guard denied: {}", reason.message), None),
+				ErrorData::new(
+					rmcp::model::ErrorCode(-32001),
+					format!("Security guard denied: {}", reason.message),
+					None,
+				),
 				request_id,
 			))
 		},
-		Ok(crate::mcp::security::GuardDecision::Modify(crate::mcp::security::ModifyAction::Transform(modified_json))) => {
+		Ok(crate::mcp::security::GuardDecision::Modify(
+			crate::mcp::security::ModifyAction::Transform(modified_json),
+		)) => {
 			// Deserialize via string round-trip to work around serde limitation
 			// with #[serde(flatten)] + #[serde(untagged)] combinations in rmcp types.
 			// serde_json::from_value fails for these types, but from_str works correctly.
@@ -728,16 +749,14 @@ fn evaluate_server_message(
 						 PII masking was NOT applied. Investigate serde compatibility."
 					);
 					Ok(msg.clone())
-				}
+				},
 			}
 		},
 		Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
 			// Other modify actions not supported
 			Ok(msg.clone())
 		},
-		Err(e) => {
-			Err(format!("Guard evaluation error: {}", e))
-		}
+		Err(e) => Err(format!("Guard evaluation error: {}", e)),
 	}
 }
 
@@ -773,10 +792,10 @@ fn accepted_response() -> Response {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::mcp::security::native::{PiiAction, PiiGuardConfig, PiiType};
 	use crate::mcp::security::{
-		GuardExecutor, GuardPhase, McpSecurityGuard, McpGuardKind, FailureMode,
+		FailureMode, GuardExecutor, GuardPhase, McpGuardKind, McpSecurityGuard,
 	};
-	use crate::mcp::security::native::{PiiGuardConfig, PiiAction, PiiType};
 
 	fn create_pii_guard_executor(pii_types: Vec<PiiType>, action: PiiAction) -> GuardExecutor {
 		let config = McpSecurityGuard {
@@ -814,25 +833,16 @@ mod tests {
 			}
 		}"#;
 
-		let msg: ServerJsonRpcMessage = serde_json::from_str(json_str)
-			.expect("Failed to parse test message");
+		let msg: ServerJsonRpcMessage =
+			serde_json::from_str(json_str).expect("Failed to parse test message");
 
-		let guards = create_pii_guard_executor(
-			vec![PiiType::CreditCard],
-			PiiAction::Mask,
-		);
+		let guards = create_pii_guard_executor(vec![PiiType::CreditCard], PiiAction::Mask);
 
-		let result = evaluate_server_message(
-			&msg,
-			&guards,
-			"test-server",
-			None,
-			RequestId::Number(1),
-		);
+		let result = evaluate_server_message(&msg, &guards, "test-server", None, RequestId::Number(1));
 
 		let modified = result.expect("evaluate_server_message should succeed");
-		let modified_json = serde_json::to_value(&modified)
-			.expect("Failed to serialize modified message");
+		let modified_json =
+			serde_json::to_value(&modified).expect("Failed to serialize modified message");
 
 		let text = modified_json["result"]["content"][0]["text"]
 			.as_str()
@@ -865,21 +875,12 @@ mod tests {
 			}
 		}"#;
 
-		let msg: ServerJsonRpcMessage = serde_json::from_str(json_str)
-			.expect("Failed to parse test message");
+		let msg: ServerJsonRpcMessage =
+			serde_json::from_str(json_str).expect("Failed to parse test message");
 
-		let guards = create_pii_guard_executor(
-			vec![PiiType::CreditCard],
-			PiiAction::Mask,
-		);
+		let guards = create_pii_guard_executor(vec![PiiType::CreditCard], PiiAction::Mask);
 
-		let result = evaluate_server_message(
-			&msg,
-			&guards,
-			"test-server",
-			None,
-			RequestId::Number(1),
-		);
+		let result = evaluate_server_message(&msg, &guards, "test-server", None, RequestId::Number(1));
 
 		let returned = result.expect("Should succeed");
 		let returned_json = serde_json::to_value(&returned).unwrap();

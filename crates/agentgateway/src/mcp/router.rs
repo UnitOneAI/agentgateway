@@ -105,7 +105,10 @@ impl App {
 				.collect::<Result<Vec<_>, _>>()?;
 
 			McpBackendGroup {
-				name: format!("{}/{}", backend_group_name.namespace, backend_group_name.name),
+				name: format!(
+					"{}/{}",
+					backend_group_name.namespace, backend_group_name.name
+				),
 				targets: nt,
 				stateful: backend.stateful,
 				security_guards: backend.security_guards.clone(),
