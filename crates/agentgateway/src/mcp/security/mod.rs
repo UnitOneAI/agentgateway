@@ -16,54 +16,56 @@ pub mod native;
 pub mod wasm;
 
 // Re-export core types
-pub use native::{ToolPoisoningDetector, RugPullDetector, ToolShadowingDetector, ServerWhitelistChecker, PiiGuard};
+pub use native::{
+	PiiGuard, RugPullDetector, ServerWhitelistChecker, ToolPoisoningDetector, ToolShadowingDetector,
+};
 
 /// Security guard that can be applied to MCP protocol operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct McpSecurityGuard {
-    /// Unique identifier for this guard
-    pub id: String,
+	/// Unique identifier for this guard
+	pub id: String,
 
-    /// Human-readable description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+	/// Human-readable description
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
 
-    /// Execution priority (lower = runs first)
-    #[serde(default = "default_priority")]
-    pub priority: u32,
+	/// Execution priority (lower = runs first)
+	#[serde(default = "default_priority")]
+	pub priority: u32,
 
-    /// Behavior when guard fails to execute
-    #[serde(default)]
-    pub failure_mode: FailureMode,
+	/// Behavior when guard fails to execute
+	#[serde(default)]
+	pub failure_mode: FailureMode,
 
-    /// Maximum time allowed for guard execution
-    #[serde(default = "default_timeout")]
-    pub timeout_ms: u64,
+	/// Maximum time allowed for guard execution
+	#[serde(default = "default_timeout")]
+	pub timeout_ms: u64,
 
-    /// Which phases this guard runs on
-    #[serde(default)]
-    pub runs_on: Vec<GuardPhase>,
+	/// Which phases this guard runs on
+	#[serde(default)]
+	pub runs_on: Vec<GuardPhase>,
 
-    /// Whether guard is enabled
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
+	/// Whether guard is enabled
+	#[serde(default = "default_enabled")]
+	pub enabled: bool,
 
-    /// The specific guard implementation
-    #[serde(flatten)]
-    pub kind: McpGuardKind,
+	/// The specific guard implementation
+	#[serde(flatten)]
+	pub kind: McpGuardKind,
 }
 
 fn default_priority() -> u32 {
-    100
+	100
 }
 
 fn default_timeout() -> u64 {
-    100
+	100
 }
 
 fn default_enabled() -> bool {
-    true
+	true
 }
 
 /// Guard implementation types
@@ -71,118 +73,110 @@ fn default_enabled() -> bool {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpGuardKind {
-    /// Tool Poisoning Detection (native)
-    ToolPoisoning(native::ToolPoisoningConfig),
+	/// Tool Poisoning Detection (native)
+	ToolPoisoning(native::ToolPoisoningConfig),
 
-    /// Rug Pull Detection (native)
-    RugPull(native::RugPullConfig),
+	/// Rug Pull Detection (native)
+	RugPull(native::RugPullConfig),
 
-    /// Tool Shadowing Prevention (native)
-    ToolShadowing(native::ToolShadowingConfig),
+	/// Tool Shadowing Prevention (native)
+	ToolShadowing(native::ToolShadowingConfig),
 
-    /// Server Whitelist Enforcement (native)
-    ServerWhitelist(native::ServerWhitelistConfig),
-    /// PII Detection and Masking (native)
-    Pii(native::PiiGuardConfig),
+	/// Server Whitelist Enforcement (native)
+	ServerWhitelist(native::ServerWhitelistConfig),
+	/// PII Detection and Masking (native)
+	Pii(native::PiiGuardConfig),
 
-    /// Custom WASM module
-    #[cfg(feature = "wasm-guards")]
-    Wasm(wasm::WasmGuardConfig),
+	/// Custom WASM module
+	#[cfg(feature = "wasm-guards")]
+	Wasm(wasm::WasmGuardConfig),
 }
 
 /// Execution phase for guards
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum GuardPhase {
-    /// Before forwarding client request to MCP server
-    Request,
+	/// Before forwarding client request to MCP server
+	#[default]
+	Request,
 
-    /// After receiving response from MCP server
-    Response,
+	/// After receiving response from MCP server
+	Response,
 
-    /// Specifically for tools/list responses
-    ToolsList,
+	/// Specifically for tools/list responses
+	ToolsList,
 
-    /// Specifically for tool invocations (tools/call)
-    ToolInvoke,
-}
-
-impl Default for GuardPhase {
-    fn default() -> Self {
-        GuardPhase::Request
-    }
+	/// Specifically for tool invocations (tools/call)
+	ToolInvoke,
 }
 
 /// How to behave when guard execution fails (timeout, error, etc.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum FailureMode {
-    /// Block request on failure (secure default)
-    FailClosed,
+	/// Block request on failure (secure default)
+	#[default]
+	FailClosed,
 
-    /// Allow request on failure (availability over security)
-    FailOpen,
-}
-
-impl Default for FailureMode {
-    fn default() -> Self {
-        FailureMode::FailClosed
-    }
+	/// Allow request on failure (availability over security)
+	FailOpen,
 }
 
 /// Decision made by a security guard
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardDecision {
-    /// Allow the operation to proceed
-    Allow,
+	/// Allow the operation to proceed
+	Allow,
 
-    /// Block the operation
-    Deny(DenyReason),
+	/// Block the operation
+	Deny(DenyReason),
 
-    /// Modify the request/response
-    Modify(ModifyAction),
+	/// Modify the request/response
+	Modify(ModifyAction),
 }
 
 /// Reason for denying an operation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DenyReason {
-    /// Short reason code (e.g., "tool_poisoning_detected")
-    pub code: String,
+	/// Short reason code (e.g., "tool_poisoning_detected")
+	pub code: String,
 
-    /// Human-readable message
-    pub message: String,
+	/// Human-readable message
+	pub message: String,
 
-    /// Optional details for debugging/auditing
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
+	/// Optional details for debugging/auditing
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub details: Option<serde_json::Value>,
 }
 
 /// Action to modify request/response
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModifyAction {
-    /// Mask sensitive data in response
-    MaskFields(Vec<String>),
+	/// Mask sensitive data in response
+	MaskFields(Vec<String>),
 
-    /// Add warning headers
-    AddWarning(String),
+	/// Add warning headers
+	AddWarning(String),
 
-    /// Transform content
-    Transform(serde_json::Value),
+	/// Transform content
+	Transform(serde_json::Value),
 }
 
 /// Context provided to guards for evaluation
 #[derive(Debug, Clone)]
 pub struct GuardContext {
-    /// Server/target name
-    pub server_name: String,
+	/// Server/target name
+	pub server_name: String,
 
-    /// Optional session/user identity
-    pub identity: Option<String>,
+	/// Optional session/user identity
+	pub identity: Option<String>,
 
-    /// Request metadata
-    pub metadata: serde_json::Value,
+	/// Request metadata
+	pub metadata: serde_json::Value,
 }
 
 /// Result of guard execution
@@ -191,18 +185,18 @@ pub type GuardResult = Result<GuardDecision, GuardError>;
 /// Errors that can occur during guard execution
 #[derive(Debug, thiserror::Error)]
 pub enum GuardError {
-    #[error("Guard execution timeout after {0:?}")]
-    Timeout(Duration),
+	#[error("Guard execution timeout after {0:?}")]
+	Timeout(Duration),
 
-    #[error("Guard execution error: {0}")]
-    ExecutionError(String),
+	#[error("Guard execution error: {0}")]
+	ExecutionError(String),
 
-    #[error("Guard configuration error: {0}")]
-    ConfigError(String),
+	#[error("Guard configuration error: {0}")]
+	ConfigError(String),
 
-    #[error("WASM module error: {0}")]
-    #[cfg(feature = "wasm-guards")]
-    WasmError(String),
+	#[error("WASM module error: {0}")]
+	#[cfg(feature = "wasm-guards")]
+	WasmError(String),
 }
 
 use std::collections::HashMap;
@@ -342,22 +336,14 @@ fn initialize_guards(configs: Vec<McpSecurityGuard>) -> Result<Vec<InitializedGu
 			McpGuardKind::ToolPoisoning(cfg) => {
 				Arc::new(native::ToolPoisoningDetector::new(cfg.clone())?)
 			},
-			McpGuardKind::RugPull(cfg) => {
-				Arc::new(native::RugPullDetector::new(cfg.clone()))
-			},
-			McpGuardKind::ToolShadowing(cfg) => {
-				Arc::new(native::ToolShadowingDetector::new(cfg.clone()))
-			},
+			McpGuardKind::RugPull(cfg) => Arc::new(native::RugPullDetector::new(cfg.clone())),
+			McpGuardKind::ToolShadowing(cfg) => Arc::new(native::ToolShadowingDetector::new(cfg.clone())),
 			McpGuardKind::ServerWhitelist(cfg) => {
 				Arc::new(native::ServerWhitelistChecker::new(cfg.clone()))
 			},
-			McpGuardKind::Pii(cfg) => {
-				Arc::new(native::PiiGuard::new(cfg.clone()))
-			},
+			McpGuardKind::Pii(cfg) => Arc::new(native::PiiGuard::new(cfg.clone())),
 			#[cfg(feature = "wasm-guards")]
-			McpGuardKind::Wasm(cfg) => {
-				Arc::new(wasm::WasmGuard::new(config.id.clone(), cfg.clone())?)
-			},
+			McpGuardKind::Wasm(cfg) => Arc::new(wasm::WasmGuard::new(config.id.clone(), cfg.clone())?),
 		};
 
 		guards.push(InitializedGuard {
@@ -386,6 +372,12 @@ impl GuardExecutor {
 		Self {
 			guards: Arc::new(RwLock::new(Vec::new())),
 		}
+	}
+
+	/// Returns true if any guards are configured
+	pub fn has_guards(&self) -> bool {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		!guards.is_empty()
 	}
 
 	/// Update guards with new configuration (hot-reload support)
@@ -430,21 +422,21 @@ impl GuardExecutor {
 			match result {
 				Ok(GuardDecision::Allow) => continue,
 				Ok(decision) => return Ok(decision),
-				Err(e) => {
-					match guard_entry.config.failure_mode {
-						FailureMode::FailClosed => {
-							return Err(GuardError::ExecutionError(format!(
-								"Guard {} failed: {}",
-								guard_entry.config.id,
-								e
-							)));
-						},
-						FailureMode::FailOpen => {
-							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
-								guard_entry.config.id, e);
-							continue;
-						},
-					}
+				Err(e) => match guard_entry.config.failure_mode {
+					FailureMode::FailClosed => {
+						return Err(GuardError::ExecutionError(format!(
+							"Guard {} failed: {}",
+							guard_entry.config.id, e
+						)));
+					},
+					FailureMode::FailOpen => {
+						tracing::warn!(
+							"Guard {} failed but continuing due to fail_open: {}",
+							guard_entry.config.id,
+							e
+						);
+						continue;
+					},
 				},
 			}
 		}
@@ -483,7 +475,11 @@ impl GuardExecutor {
 
 			// Execute guard with timeout
 			let result = self.execute_with_timeout(
-				|| guard_entry.guard.evaluate_tool_invoke(tool_name, arguments, context),
+				|| {
+					guard_entry
+						.guard
+						.evaluate_tool_invoke(tool_name, arguments, context)
+				},
 				Duration::from_millis(guard_entry.config.timeout_ms),
 				&guard_entry.config,
 			);
@@ -492,21 +488,21 @@ impl GuardExecutor {
 			match result {
 				Ok(GuardDecision::Allow) => continue,
 				Ok(decision) => return Ok(decision),
-				Err(e) => {
-					match guard_entry.config.failure_mode {
-						FailureMode::FailClosed => {
-							return Err(GuardError::ExecutionError(format!(
-								"Guard {} failed: {}",
-								guard_entry.config.id,
-								e
-							)));
-						},
-						FailureMode::FailOpen => {
-							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
-								guard_entry.config.id, e);
-							continue;
-						},
-					}
+				Err(e) => match guard_entry.config.failure_mode {
+					FailureMode::FailClosed => {
+						return Err(GuardError::ExecutionError(format!(
+							"Guard {} failed: {}",
+							guard_entry.config.id, e
+						)));
+					},
+					FailureMode::FailOpen => {
+						tracing::warn!(
+							"Guard {} failed but continuing due to fail_open: {}",
+							guard_entry.config.id,
+							e
+						);
+						continue;
+					},
 				},
 			}
 		}
@@ -543,21 +539,21 @@ impl GuardExecutor {
 			match result {
 				Ok(GuardDecision::Allow) => continue,
 				Ok(decision) => return Ok(decision),
-				Err(e) => {
-					match guard_entry.config.failure_mode {
-						FailureMode::FailClosed => {
-							return Err(GuardError::ExecutionError(format!(
-								"Guard {} failed: {}",
-								guard_entry.config.id,
-								e
-							)));
-						},
-						FailureMode::FailOpen => {
-							tracing::warn!("Guard {} failed but continuing due to fail_open: {}",
-								guard_entry.config.id, e);
-							continue;
-						},
-					}
+				Err(e) => match guard_entry.config.failure_mode {
+					FailureMode::FailClosed => {
+						return Err(GuardError::ExecutionError(format!(
+							"Guard {} failed: {}",
+							guard_entry.config.id, e
+						)));
+					},
+					FailureMode::FailOpen => {
+						tracing::warn!(
+							"Guard {} failed but continuing due to fail_open: {}",
+							guard_entry.config.id,
+							e
+						);
+						continue;
+					},
 				},
 			}
 		}
@@ -596,11 +592,11 @@ impl GuardExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn test_guard_deserialization() {
-        let yaml = r#"
+	#[test]
+	fn test_guard_deserialization() {
+		let yaml = r#"
 id: test-guard
 priority: 100
 failure_mode: fail_closed
@@ -613,16 +609,16 @@ custom_patterns:
   - "(?i)SYSTEM:\\s*override"
 "#;
 
-        let guard: McpSecurityGuard = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(guard.id, "test-guard");
-        assert_eq!(guard.priority, 100);
-        assert_eq!(guard.timeout_ms, 50);
-        assert!(matches!(guard.kind, McpGuardKind::ToolPoisoning(_)));
-    }
+		let guard: McpSecurityGuard = serde_yaml::from_str(yaml).unwrap();
+		assert_eq!(guard.id, "test-guard");
+		assert_eq!(guard.priority, 100);
+		assert_eq!(guard.timeout_ms, 50);
+		assert!(matches!(guard.kind, McpGuardKind::ToolPoisoning(_)));
+	}
 
-    #[test]
-    fn test_pii_guard_deserialization() {
-        let yaml = r#"
+	#[test]
+	fn test_pii_guard_deserialization() {
+		let yaml = r#"
 id: pii-guard
 priority: 50
 runs_on:
@@ -636,22 +632,22 @@ detect:
 action: reject
 "#;
 
-        let guard: McpSecurityGuard = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(guard.id, "pii-guard");
-        assert_eq!(guard.priority, 50);
-        assert_eq!(guard.runs_on.len(), 3);
-        assert!(guard.runs_on.contains(&GuardPhase::Request));
-        assert!(guard.runs_on.contains(&GuardPhase::Response));
-        assert!(guard.runs_on.contains(&GuardPhase::ToolInvoke));
+		let guard: McpSecurityGuard = serde_yaml::from_str(yaml).unwrap();
+		assert_eq!(guard.id, "pii-guard");
+		assert_eq!(guard.priority, 50);
+		assert_eq!(guard.runs_on.len(), 3);
+		assert!(guard.runs_on.contains(&GuardPhase::Request));
+		assert!(guard.runs_on.contains(&GuardPhase::Response));
+		assert!(guard.runs_on.contains(&GuardPhase::ToolInvoke));
 
-        match guard.kind {
-            McpGuardKind::Pii(config) => {
-                assert_eq!(config.detect.len(), 2);
-                assert!(config.detect.contains(&native::PiiType::Email));
-                assert!(config.detect.contains(&native::PiiType::CreditCard));
-                assert_eq!(config.action, native::PiiAction::Reject);
-            },
-            _ => panic!("Expected Pii guard kind"),
-        }
-    }
+		match guard.kind {
+			McpGuardKind::Pii(config) => {
+				assert_eq!(config.detect.len(), 2);
+				assert!(config.detect.contains(&native::PiiType::Email));
+				assert!(config.detect.contains(&native::PiiType::CreditCard));
+				assert_eq!(config.action, native::PiiAction::Reject);
+			},
+			_ => panic!("Expected Pii guard kind"),
+		}
+	}
 }

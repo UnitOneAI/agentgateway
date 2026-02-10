@@ -612,6 +612,44 @@
 |`binds[].listeners[].routes[].backends[].(1)mcp.targets[].policies.tcp.connectTimeout.nanos`||
 |`binds[].listeners[].routes[].backends[].(1)mcp.statefulMode`||
 |`binds[].listeners[].routes[].backends[].(1)mcp.prefixMode`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards`|Security guards to apply to this MCP backend|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)strict_mode`|Enable strict mode (blocks on any suspicious pattern)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)custom_patterns`|Custom regex patterns to detect (in addition to built-in patterns)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)scan_fields`|Fields to scan in tool metadata|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)alert_threshold`|Minimum number of pattern matches to trigger alert|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)type`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)enabled`|Enable baseline tracking|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)risk_threshold`|Risk threshold for blocking (cumulative score triggers Deny)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)removal_weight`|Risk weight for tool removal (default: 3 - high risk)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)schema_change_weight`|Risk weight for schema changes (default: 3 - high risk)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)description_change_weight`|Risk weight for description changes (default: 2 - medium risk)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)addition_weight`|Risk weight for tool additions (default: 1 - low risk)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_changes`|Enable/disable specific change type detection|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_changes.removals`|Detect tool removals (default: true)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_changes.additions`|Detect tool additions (default: true)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_changes.description_changes`|Detect description changes (default: true)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_changes.schema_changes`|Detect schema changes (default: true)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)update_baseline_on_allow`|Whether to update baseline after allowing changes below threshold|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)type`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)block_duplicates`|Block duplicate tool names across servers|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)protected_names`|Protected MCP protocol method names|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)type`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)allowed_servers`|List of allowed server names/IDs|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect_typosquats`|Detect typosquatting attempts|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)similarity_threshold`|Similarity threshold for typo detection (0.0-1.0)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)type`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)detect`|Which PII types to detect (defaults to all)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)action`|Action to take when PII is detected|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)min_score`|Minimum confidence score to trigger detection (0.0 - 1.0)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)rejection_message`|Custom rejection message (only used when action is Reject)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].(1)type`||
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].id`|Unique identifier for this guard|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].description`|Human-readable description|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].priority`|Execution priority (lower = runs first)|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].failure_mode`|Behavior when guard fails to execute|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].timeout_ms`|Maximum time allowed for guard execution|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].runs_on`|Which phases this guard runs on|
+|`binds[].listeners[].routes[].backends[].(1)mcp.securityGuards[].enabled`|Whether guard is enabled|
 |`binds[].listeners[].routes[].backends[].(1)ai`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)name`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)provider`||
