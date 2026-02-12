@@ -207,13 +207,6 @@ impl ProxyError {
 		}
 	}
 	pub fn into_response(self) -> Response {
-		// For upstream MCP errors, return the original response directly.
-		// This preserves headers like WWW-Authenticate needed for OAuth flows.
-		if let ProxyError::MCP(mcp::Error::UpstreamError(resp)) = self {
-			let (parts, body) = resp.0.into_parts();
-			return ::http::Response::from_parts(parts, http::Body::from(body));
-		}
-
 		let code = match self {
 			ProxyError::BindNotFound => StatusCode::NOT_FOUND,
 			ProxyError::ListenerNotFound => StatusCode::NOT_FOUND,
