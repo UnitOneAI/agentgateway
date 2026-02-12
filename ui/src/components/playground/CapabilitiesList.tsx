@@ -14,7 +14,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Button } from "@/components/ui/button";
 import { Loader2, Bot, Zap, Settings, RefreshCw } from "lucide-react";
 
 interface CapabilitiesListProps {
@@ -58,17 +57,17 @@ export function CapabilitiesList({
               <Settings className="h-5 w-5" />
             )}
             {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
-          {connectionType === "mcp" && onRefreshMcpTools && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 ml-auto"
-              onClick={onRefreshMcpTools}
-              disabled={isLoading}
-            >
-              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            </Button>
-          )}
+            {connectionType === "mcp" && onRefreshMcpTools && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 ml-auto"
+                onClick={onRefreshMcpTools}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              </Button>
+            )}
           </CardTitle>
           {connectionType === "mcp" && onRefreshMcpTools && (
             <Button variant="outline" size="sm" onClick={onRefreshMcpTools} disabled={isLoading}>

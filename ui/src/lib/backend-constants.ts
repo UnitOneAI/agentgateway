@@ -1,19 +1,3 @@
-import type {
-  SecurityGuardType,
-  FailureMode,
-  GuardPhase,
-  PiiType,
-  PiiAction,
-  ScanField,
-  ToolPoisoningGuard,
-  RugPullGuard,
-  ToolShadowingGuard,
-  ServerWhitelistGuard,
-  PiiGuard,
-  WasmGuard,
-  SecurityGuard,
-} from "./types";
-
 export const DEFAULT_BACKEND_FORM = {
   name: "",
   weight: "1",
@@ -301,19 +285,3 @@ export function getDefaultGuard(type: SecurityGuardType): SecurityGuard {
       return { ...DEFAULT_WASM_GUARD, id: baseId };
   }
 }
-
-export const MCP_TARGET_TYPES = [
-  { value: "mcp", label: "MCP (Streamable HTTP)" },
-  { value: "sse", label: "SSE" },
-  { value: "stdio", label: "Stdio" },
-  { value: "openapi", label: "OpenAPI" },
-] as const;
-
-export const AI_PROVIDERS = [
-  { value: "openAI", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "vertex", label: "Vertex AI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "bedrock", label: "Bedrock" },
-  { value: "azureOpenAI", label: "Azure OpenAI" },
-] as const;

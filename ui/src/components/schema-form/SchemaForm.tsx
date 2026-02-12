@@ -55,7 +55,7 @@ export function SchemaForm({
   const groupedProperties = useMemo(() => getGroupedProperties(schema), [schema]);
 
   // Get group definitions from schema
-  const groupDefs = schema["x-ui-groups"] || {};
+  const groupDefs = useMemo(() => schema["x-ui-groups"] || {}, [schema]);
 
   // Sort groups by their order
   const sortedGroups = useMemo(() => {
