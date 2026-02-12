@@ -48,8 +48,8 @@ export const DEFAULT_BACKEND_FORM = {
     schema: boolean;
   }>,
   mcpStateful: true,
-  // Security guards for MCP backend
-  securityGuards: [] as SecurityGuard[],
+  // Security guards for MCP backends
+  securityGuards: [] as Array<import("./types").SecurityGuard>,
   // AI backend fields
   aiProvider: "openAI" as "openAI" | "gemini" | "vertex" | "anthropic" | "bedrock" | "azureOpenAI",
   aiModel: "",
@@ -124,6 +124,22 @@ export const AI_REGION_PLACEHOLDERS = {
 // =============================================================================
 // Security Guards Constants
 // =============================================================================
+
+import type {
+  SecurityGuardType,
+  FailureMode,
+  GuardPhase,
+  PiiType,
+  PiiAction,
+  ScanField,
+  ToolPoisoningGuard,
+  RugPullGuard,
+  ToolShadowingGuard,
+  ServerWhitelistGuard,
+  PiiGuard,
+  WasmGuard,
+  SecurityGuard,
+} from "./types";
 
 // Base security guard defaults (common fields)
 export const DEFAULT_SECURITY_GUARD_BASE = {

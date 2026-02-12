@@ -1,5 +1,21 @@
 import { PolicyType } from "./policy-constants";
 
+// MCP-specific CORS defaults for proper MCP protocol support
+export const MCP_CORS_DEFAULTS = {
+  allowCredentials: true,
+  allowHeaders: [
+    "mcp-protocol-version",
+    "content-type",
+    "cache-control",
+    "accept",
+    "mcp-session-id",
+  ],
+  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowOrigins: ["*"],
+  exposeHeaders: ["mcp-session-id"],
+  maxAge: null,
+};
+
 export function getDefaultPolicyData(type: PolicyType) {
   switch (type) {
     case "jwtAuth":

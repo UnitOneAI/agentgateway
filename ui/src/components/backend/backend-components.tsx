@@ -476,15 +476,20 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
               </div>
             ) : (
               <Select
-                value={`${backendForm.selectedBindPort}-${backendForm.selectedListenerName}-${backendForm.selectedRouteIndex}`}
+                value={`${backendForm.selectedBindPort}|${backendForm.selectedListenerName}|${backendForm.selectedRouteIndex}`}
                 onValueChange={(value) => {
-                  const [bindPort, listenerName, routeIndex] = value.split("-");
-                  setBackendForm((prev) => ({
-                    ...prev,
-                    selectedBindPort: bindPort,
-                    selectedListenerName: listenerName,
-                    selectedRouteIndex: routeIndex,
-                  }));
+                  const parts = value.split("|");
+                  if (parts.length >= 3) {
+                    const bindPort = parts[0];
+                    const routeIndex = parts[parts.length - 1];
+                    const listenerName = parts.slice(1, -1).join("|");
+                    setBackendForm((prev) => ({
+                      ...prev,
+                      selectedBindPort: bindPort,
+                      selectedListenerName: listenerName,
+                      selectedRouteIndex: routeIndex,
+                    }));
+                  }
                 }}
               >
                 <SelectTrigger>
@@ -498,8 +503,8 @@ export const AddBackendDialog: React.FC<AddBackendDialogProps> = ({
                   ) : (
                     getAvailableRoutes(binds).map((route) => (
                       <SelectItem
-                        key={`${route.bindPort}-${route.listenerName}-${route.routeIndex}`}
-                        value={`${route.bindPort}-${route.listenerName}-${route.routeIndex}`}
+                        key={`${route.bindPort}|${route.listenerName}|${route.routeIndex}`}
+                        value={`${route.bindPort}|${route.listenerName}|${route.routeIndex}`}
                       >
                         Port {route.bindPort} → {route.listenerName} → {route.routeName} (
                         {route.path})
@@ -1535,6 +1540,14 @@ const McpBackendForm: React.FC<McpBackendFormProps> = ({
         </p>
       </div>
     )}
+
+    {/* Security Guards Section */}
+    <SecurityGuardsSection
+      guards={backendForm.securityGuards}
+      addSecurityGuard={addSecurityGuard}
+      removeSecurityGuard={removeSecurityGuard}
+      updateSecurityGuardField={updateSecurityGuardField}
+    />
 
     <div className="flex items-center space-x-2">
       <input

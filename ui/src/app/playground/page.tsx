@@ -485,13 +485,15 @@ export default function PlaygroundPage() {
 
         await client.connect(transport);
         setMcpState((prev) => ({ ...prev, client }));
-        setConnectionState((prev) => ({ ...prev, isConnected: true }));
-        toast.success("Connected to MCP endpoint");
 
         setUiState((prev) => ({ ...prev, isLoadingCapabilities: true }));
         const listToolsRequest: McpClientRequest = { method: "tools/list", params: {} };
         const toolsResponse = await client.request(listToolsRequest, McpListToolsResultSchema);
         setMcpState((prev) => ({ ...prev, tools: toolsResponse.tools }));
+
+        // Only mark as connected and show success after tools are loaded successfully
+        setConnectionState((prev) => ({ ...prev, isConnected: true }));
+        toast.success("Connected to MCP endpoint");
       } else if (backendType === "a2a") {
         // Connect to A2A endpoint
         setConnectionState((prev) => ({ ...prev, connectionType: "a2a" }));
@@ -740,15 +742,41 @@ export default function PlaygroundPage() {
           arguments: mcpState.paramValues,
         },
       };
+
       const result = await mcpState.client.request(request, McpToolResponseSchema);
+
       setMcpState((prev) => ({ ...prev, response: result }));
       toast.success(`Tool ${mcpState.selectedTool?.name} executed.`);
     } catch (error: any) {
-      const message = error instanceof McpError ? error.message : "Failed to run tool";
+      const message =
+        error instanceof McpError ? error.message : error?.message || "Failed to run tool";
       setMcpState((prev) => ({ ...prev, response: { error: message, details: error } }));
       toast.error(message);
     } finally {
       setUiState((prev) => ({ ...prev, isRequestRunning: false }));
+    }
+  };
+
+  const refreshMcpTools = async () => {
+    if (!mcpState.client) return;
+
+    setUiState((prev) => ({ ...prev, isLoadingCapabilities: true }));
+    try {
+      // Call tools/list through the existing gateway connection
+      // The gateway will re-fetch from all configured MCP targets
+      const listToolsRequest: McpClientRequest = { method: "tools/list", params: {} };
+      const toolsResponse = await mcpState.client.request(
+        listToolsRequest,
+        McpListToolsResultSchema
+      );
+      setMcpState((prev) => ({ ...prev, tools: toolsResponse.tools }));
+      toast.success(`Refreshed tools list (${toolsResponse.tools.length} tools)`);
+    } catch (error: any) {
+      const message =
+        error instanceof McpError ? error.message : error?.message || "Failed to refresh tools";
+      toast.error(message);
+    } finally {
+      setUiState((prev) => ({ ...prev, isLoadingCapabilities: false }));
     }
   };
 
@@ -1436,6 +1464,7 @@ export default function PlaygroundPage() {
             selectedA2aSkillId={a2aState.selectedSkill?.id ?? null}
             onMcpToolSelect={handleMcpToolSelect}
             onA2aSkillSelect={handleA2aSkillSelect}
+            onRefreshMcpTools={refreshMcpTools}
           />
 
           <ActionPanel

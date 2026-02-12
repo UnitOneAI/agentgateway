@@ -15,48 +15,48 @@ use crate::mcp::security::{GuardContext, GuardDecision, GuardResult};
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ServerWhitelistConfig {
-    /// List of allowed server names/IDs
-    #[serde(default)]
-    pub allowed_servers: Vec<String>,
+	/// List of allowed server names/IDs
+	#[serde(default)]
+	pub allowed_servers: Vec<String>,
 
-    /// Detect typosquatting attempts
-    #[serde(default = "default_detect_typosquats")]
-    pub detect_typosquats: bool,
+	/// Detect typosquatting attempts
+	#[serde(default = "default_detect_typosquats")]
+	pub detect_typosquats: bool,
 
-    /// Similarity threshold for typo detection (0.0-1.0)
-    #[serde(default = "default_similarity_threshold")]
-    pub similarity_threshold: f32,
+	/// Similarity threshold for typo detection (0.0-1.0)
+	#[serde(default = "default_similarity_threshold")]
+	pub similarity_threshold: f32,
 }
 
 fn default_detect_typosquats() -> bool {
-    true
+	true
 }
 
 fn default_similarity_threshold() -> f32 {
-    0.85
+	0.85
 }
 
 /// Server Whitelist Checker implementation
 pub struct ServerWhitelistChecker {
-    #[allow(dead_code)]
-    config: ServerWhitelistConfig,
+	#[allow(dead_code)]
+	config: ServerWhitelistConfig,
 }
 
 impl ServerWhitelistChecker {
-    pub fn new(config: ServerWhitelistConfig) -> Self {
-        Self { config }
-    }
+	pub fn new(config: ServerWhitelistConfig) -> Self {
+		Self { config }
+	}
 }
 
 impl NativeGuard for ServerWhitelistChecker {
-    fn evaluate_tools_list(
-        &self,
-        _tools: &[rmcp::model::Tool],
-        _context: &GuardContext,
-    ) -> GuardResult {
-        tracing::info!("ServerWhitelistChecker::evaluate_tools_list called");
-        // TODO: Implement whitelist checking and typosquatting detection
-        // For now, always allow
-        Ok(GuardDecision::Allow)
-    }
+	fn evaluate_tools_list(
+		&self,
+		_tools: &[rmcp::model::Tool],
+		_context: &GuardContext,
+	) -> GuardResult {
+		tracing::info!("ServerWhitelistChecker::evaluate_tools_list called");
+		// TODO: Implement whitelist checking and typosquatting detection
+		// For now, always allow
+		Ok(GuardDecision::Allow)
+	}
 }

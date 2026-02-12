@@ -59,6 +59,8 @@ pub enum Error {
 	ForwardLegacySse(String),
 	#[error("failed to create SSE url: {0}")]
 	CreateSseUrl(String),
+	#[error("security guard rejected: {1} - {2}")]
+	SecurityGuard(RequestId, String, String),
 }
 
 impl From<Error> for ProxyError {

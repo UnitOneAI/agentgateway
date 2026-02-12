@@ -40,7 +40,7 @@ fn resource_name(default_target_name: Option<&String>, target: &str, name: &str)
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Relay {
 	upstreams: Arc<upstream::UpstreamGroup>,
 	pub policies: McpAuthorizationSet,
@@ -48,6 +48,17 @@ pub struct Relay {
 	// Else this is empty
 	default_target_name: Option<String>,
 	is_multiplexing: bool,
+	security_guards: Arc<crate::mcp::security::GuardExecutor>,
+}
+
+impl std::fmt::Debug for Relay {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Relay")
+			.field("policies", &self.policies)
+			.field("default_target_name", &self.default_target_name)
+			.field("is_multiplexing", &self.is_multiplexing)
+			.finish()
+	}
 }
 
 impl Relay {
@@ -55,6 +66,7 @@ impl Relay {
 		backend: McpBackendGroup,
 		policies: McpAuthorizationSet,
 		client: PolicyClient,
+		guard_registry: crate::mcp::security::GuardExecutorRegistry,
 	) -> anyhow::Result<Self> {
 		let mut is_multiplexing = false;
 		let default_target_name = if backend.targets.len() != 1 {
@@ -65,15 +77,21 @@ impl Relay {
 		} else {
 			Some(backend.targets[0].name.to_string())
 		};
-		// TODO: Evaluate connection guards BEFORE establishing connections.
-		// This requires wiring GuardExecutorRegistry into Relay::new().
-		// When integrated, guards will inspect each target and block malicious/unknown servers.
+
+		// Get or create security guards from registry (enables hot-reload)
+		let security_guards = guard_registry
+			.get_or_create(&backend.name, backend.security_guards.clone())
+			.unwrap_or_else(|e| {
+				tracing::warn!("Failed to initialize security guards: {}", e);
+				Arc::new(crate::mcp::security::GuardExecutor::empty())
+			});
 
 		Ok(Self {
 			upstreams: Arc::new(upstream::UpstreamGroup::new(client, backend)?),
 			policies,
 			default_target_name,
 			is_multiplexing,
+			security_guards,
 		})
 	}
 
@@ -118,44 +136,213 @@ impl Relay {
 		self.default_target_name.clone()
 	}
 
+	/// Evaluate security guards on a tool invocation
+	pub fn evaluate_tool_invoke(
+		&self,
+		tool_name: &str,
+		arguments: &serde_json::Value,
+		server_name: &str,
+		identity: Option<String>,
+	) -> crate::mcp::security::GuardResult {
+		let context = crate::mcp::security::GuardContext {
+			server_name: server_name.to_string(),
+			identity,
+			metadata: serde_json::Value::Null,
+		};
+		self
+			.security_guards
+			.evaluate_tool_invoke(tool_name, arguments, &context)
+	}
+
+	/// Reset security guard state for all upstream servers (called on session re-initialization)
+	pub fn reset_all_security_guards(&self) {
+		for (name, _) in self.upstreams.iter_named() {
+			self.security_guards.reset_server(&name);
+		}
+		tracing::info!("Reset security guard state for all upstream servers");
+	}
+
+	/// Fetch tools from all upstreams and establish security guard baselines.
+	/// This is called after initialization to ensure baselines exist before any tools/call.
+	/// Runs asynchronously and doesn't block the initialization response.
+	pub async fn establish_security_baselines(&self, ctx: IncomingRequestContext) {
+		use futures_util::StreamExt;
+
+		tracing::info!("Establishing security guard baselines for all upstreams");
+
+		for (server_name, upstream) in self.upstreams.iter_named() {
+			// Create a tools/list request
+			let request = JsonRpcRequest {
+				jsonrpc: Default::default(),
+				id: RequestId::Number(0),
+				request: ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest {
+					method: Default::default(),
+					params: None,
+					extensions: Default::default(),
+				}),
+			};
+
+			// Send the request and collect tools
+			match upstream.generic_stream(request, &ctx).await {
+				Ok(stream) => {
+					// Collect the response
+					let messages: Vec<_> = stream.collect().await;
+					for msg in messages {
+						match msg {
+							Ok(rmcp::model::ServerJsonRpcMessage::Response(resp)) => {
+								if let rmcp::model::ServerResult::ListToolsResult(ltr) = resp.result {
+									let tools = ltr.tools;
+									tracing::info!(
+										server = %server_name,
+										tool_count = tools.len(),
+										"Fetched tools for baseline establishment"
+									);
+
+									// Evaluate through guards to establish baseline
+									let context = crate::mcp::security::GuardContext {
+										server_name: server_name.to_string(),
+										identity: None,
+										metadata: serde_json::Value::Null,
+									};
+
+									match self.security_guards.evaluate_tools_list(&tools, &context) {
+										Ok(crate::mcp::security::GuardDecision::Allow) => {
+											tracing::info!(
+												server = %server_name,
+												"Baseline established successfully"
+											);
+										},
+										Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+											tracing::warn!(
+												server = %server_name,
+												code = %reason.code,
+												"Initial baseline denied (unexpected)"
+											);
+										},
+										Ok(_) | Err(_) => {
+											tracing::warn!(
+												server = %server_name,
+												"Baseline establishment had issues"
+											);
+										},
+									}
+								}
+							},
+							Ok(_) => {
+								// Notifications or other messages, ignore
+							},
+							Err(e) => {
+								tracing::warn!(
+									server = %server_name,
+									error = %e,
+									"Error fetching tools for baseline"
+								);
+							},
+						}
+					}
+				},
+				Err(e) => {
+					tracing::warn!(
+						server = %server_name,
+						error = %e,
+						"Failed to fetch tools for baseline establishment"
+					);
+				},
+			}
+		}
+
+		tracing::info!("Security guard baseline establishment complete");
+	}
+
 	pub fn merge_tools(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		let default_target_name = self.default_target_name.clone();
+		let security_guards = self.security_guards.clone();
 		Box::new(move |streams| {
-			let tools = streams
-				.into_iter()
-				.flat_map(|(server_name, s)| {
-					let tools = match s {
-						ServerResult::ListToolsResult(ltr) => ltr.tools,
-						_ => vec![],
-					};
-					tools
-						.into_iter()
-						// Apply authorization policies, filtering tools that are not allowed.
-						.filter(|t| {
-							policies.validate(
-								&rbac::ResourceType::Tool(rbac::ResourceId::new(
-									server_name.to_string(),
-									t.name.to_string(),
-								)),
-								&cel,
-							)
-						})
-						// Rename to handle multiplexing
-						.map(|t| Tool {
-							name: Cow::Owned(resource_name(
-								default_target_name.as_ref(),
-								server_name.as_str(),
-								&t.name,
+			let mut all_tools = Vec::new();
+
+			// Process each server's tools individually for security guard evaluation
+			for (server_name, s) in streams.into_iter() {
+				let tools = match s {
+					ServerResult::ListToolsResult(ltr) => ltr.tools,
+					_ => vec![],
+				};
+
+				// Execute security guards on this server's tools list BEFORE merging
+				// This ensures baselines are stored per-server, not under "merged"
+				let context = crate::mcp::security::GuardContext {
+					server_name: server_name.to_string(),
+					identity: None,
+					metadata: serde_json::Value::Null,
+				};
+
+				match security_guards.evaluate_tools_list(&tools, &context) {
+					Ok(crate::mcp::security::GuardDecision::Allow) => {
+						// Continue normally - add tools to merged list
+					},
+					Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+						tracing::error!(
+							server = %server_name,
+							code = %reason.code,
+							message = %reason.message,
+							"Security guard denied tools list for server"
+						);
+						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
+							"Security guard denied for server '{}': {} - {}",
+							server_name,
+							reason.code,
+							reason.message
+						)));
+					},
+					Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
+						// TODO: Implement modification logic
+						tracing::warn!(
+							server = %server_name,
+							"Security guard requested modification, but modification is not yet implemented"
+						);
+					},
+					Err(e) => {
+						tracing::error!(
+							server = %server_name,
+							error = %e,
+							"Security guard execution failed"
+						);
+						return Err(crate::mcp::ClientError::new(anyhow::anyhow!(
+							"Security guard failed for server '{}': {}",
+							server_name,
+							e
+						)));
+					},
+				}
+
+				// Apply authorization policies and rename for multiplexing
+				let filtered_tools = tools
+					.into_iter()
+					.filter(|t| {
+						policies.validate(
+							&rbac::ResourceType::Tool(rbac::ResourceId::new(
+								server_name.to_string(),
+								t.name.to_string(),
 							)),
-							..t
-						})
-						.collect_vec()
-				})
-				.collect_vec();
+							&cel,
+						)
+					})
+					.map(|t| Tool {
+						name: Cow::Owned(resource_name(
+							default_target_name.as_ref(),
+							server_name.as_str(),
+							&t.name,
+						)),
+						..t
+					})
+					.collect_vec();
+
+				all_tools.extend(filtered_tools);
+			}
+
 			Ok(
 				ListToolsResult {
-					tools,
+					tools: all_tools,
 					next_cursor: None,
 					meta: None,
 				}
@@ -308,6 +495,22 @@ impl Relay {
 		ctx: IncomingRequestContext,
 		service_name: &str,
 	) -> Result<Response, UpstreamError> {
+		self
+			.send_single_guarded(r, ctx, service_name, false, None)
+			.await
+	}
+
+	/// Send a single request with optional response guard evaluation
+	pub async fn send_single_guarded(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		service_name: &str,
+		evaluate_response: bool,
+		identity: Option<String>,
+	) -> Result<Response, UpstreamError> {
+		use futures_util::StreamExt;
+
 		let id = r.id.clone();
 		let Ok(us) = self.upstreams.get(service_name) else {
 			return Err(UpstreamError::InvalidRequest(format!(
@@ -316,8 +519,42 @@ impl Relay {
 		};
 		let stream = us.generic_stream(r, &ctx).await?;
 
-		messages_to_response(id, stream)
+		if !evaluate_response {
+			return messages_to_response(id, stream);
+		}
+
+		// Wrap the stream to evaluate responses through security guards
+		let guards = self.security_guards.clone();
+		let server_name = service_name.to_string();
+		let identity_clone = identity.clone();
+		let request_id = id.clone();
+
+		let guarded_stream = stream.map(move |result| {
+			match result {
+				Ok(msg) => {
+					// Try to evaluate the response through guards
+					match evaluate_server_message(
+						&msg,
+						&guards,
+						&server_name,
+						identity_clone.clone(),
+						request_id.clone(),
+					) {
+						Ok(modified_msg) => Ok(modified_msg),
+						Err(e) => {
+							tracing::warn!(error = %e, "Guard evaluation failed on response");
+							// On guard error, return original message (fail-open for responses)
+							Ok(msg)
+						},
+					}
+				},
+				Err(e) => Err(e),
+			}
+		});
+
+		messages_to_response(id, guarded_stream)
 	}
+
 	// For some requests, we don't have a sane mapping of incoming requests to a specific
 	// downstream service when multiplexing. Only forward when we have only one backend.
 	pub async fn send_single_without_multiplexing(
@@ -450,6 +687,79 @@ pub fn setup_request_log(
 	(_span, log, cel)
 }
 
+/// Evaluate a server message through security guards
+fn evaluate_server_message(
+	msg: &ServerJsonRpcMessage,
+	guards: &crate::mcp::security::GuardExecutor,
+	server_name: &str,
+	identity: Option<String>,
+	request_id: RequestId,
+) -> Result<ServerJsonRpcMessage, String> {
+	// Convert message to JSON for guard evaluation
+	let json_value =
+		serde_json::to_value(msg).map_err(|e| format!("Failed to serialize message: {}", e))?;
+
+	let context = crate::mcp::security::GuardContext {
+		server_name: server_name.to_string(),
+		identity,
+		metadata: serde_json::Value::Null,
+	};
+
+	// Evaluate through guards (using Response phase)
+	match guards.evaluate_response(&json_value, &context) {
+		Ok(crate::mcp::security::GuardDecision::Allow) => {
+			// No modification needed
+			Ok(msg.clone())
+		},
+		Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+			tracing::warn!(
+				code = %reason.code,
+				message = %reason.message,
+				"Security guard denied response"
+			);
+			// Return an error message with the correct request ID
+			Ok(ServerJsonRpcMessage::error(
+				ErrorData::new(
+					rmcp::model::ErrorCode(-32001),
+					format!("Security guard denied: {}", reason.message),
+					None,
+				),
+				request_id,
+			))
+		},
+		Ok(crate::mcp::security::GuardDecision::Modify(
+			crate::mcp::security::ModifyAction::Transform(modified_json),
+		)) => {
+			// Deserialize via string round-trip to work around serde limitation
+			// with #[serde(flatten)] + #[serde(untagged)] combinations in rmcp types.
+			// serde_json::from_value fails for these types, but from_str works correctly.
+			// See: https://github.com/serde-rs/serde/issues/1183
+			let json_string = serde_json::to_string(&modified_json)
+				.map_err(|e| format!("Failed to serialize modified JSON: {}", e))?;
+			match serde_json::from_str::<ServerJsonRpcMessage>(&json_string) {
+				Ok(modified_msg) => {
+					tracing::info!("Response modified by security guard");
+					Ok(modified_msg)
+				},
+				Err(e) => {
+					tracing::error!(
+						error = %e,
+						modified_json = %modified_json,
+						"Failed to deserialize guard-modified response - returning ORIGINAL unmasked message. \
+						 PII masking was NOT applied. Investigate serde compatibility."
+					);
+					Ok(msg.clone())
+				},
+			}
+		},
+		Ok(crate::mcp::security::GuardDecision::Modify(_)) => {
+			// Other modify actions not supported
+			Ok(msg.clone())
+		},
+		Err(e) => Err(format!("Guard evaluation error: {}", e)),
+	}
+}
+
 fn messages_to_response(
 	id: RequestId,
 	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
@@ -477,4 +787,106 @@ fn accepted_response() -> Response {
 		.status(StatusCode::ACCEPTED)
 		.body(crate::http::Body::empty())
 		.expect("valid response")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::mcp::security::native::{PiiAction, PiiGuardConfig, PiiType};
+	use crate::mcp::security::{
+		FailureMode, GuardExecutor, GuardPhase, McpGuardKind, McpSecurityGuard,
+	};
+
+	fn create_pii_guard_executor(pii_types: Vec<PiiType>, action: PiiAction) -> GuardExecutor {
+		let config = McpSecurityGuard {
+			id: "test-pii".to_string(),
+			description: None,
+			priority: 50,
+			failure_mode: FailureMode::FailClosed,
+			timeout_ms: 100,
+			runs_on: vec![GuardPhase::Response],
+			enabled: true,
+			kind: McpGuardKind::Pii(PiiGuardConfig {
+				detect: pii_types,
+				action,
+				min_score: 0.3,
+				rejection_message: None,
+			}),
+		};
+		GuardExecutor::new(vec![config]).expect("Failed to create guard executor")
+	}
+
+	#[test]
+	fn test_credit_card_masking_round_trip() {
+		// Build a ServerJsonRpcMessage containing a credit card number
+		// using from_str (the same way the gateway receives messages).
+		let json_str = r#"{
+			"jsonrpc": "2.0",
+			"id": 1,
+			"result": {
+				"content": [
+					{
+						"type": "text",
+						"text": "Your card number is 4111111111111111"
+					}
+				]
+			}
+		}"#;
+
+		let msg: ServerJsonRpcMessage =
+			serde_json::from_str(json_str).expect("Failed to parse test message");
+
+		let guards = create_pii_guard_executor(vec![PiiType::CreditCard], PiiAction::Mask);
+
+		let result = evaluate_server_message(&msg, &guards, "test-server", None, RequestId::Number(1));
+
+		let modified = result.expect("evaluate_server_message should succeed");
+		let modified_json =
+			serde_json::to_value(&modified).expect("Failed to serialize modified message");
+
+		let text = modified_json["result"]["content"][0]["text"]
+			.as_str()
+			.expect("Expected text content");
+
+		assert!(
+			text.contains("<CREDIT_CARD>"),
+			"Credit card should be masked with <CREDIT_CARD>, got: {}",
+			text
+		);
+		assert!(
+			!text.contains("4111111111111111"),
+			"Original credit card number should be removed, got: {}",
+			text
+		);
+	}
+
+	#[test]
+	fn test_clean_message_passes_through() {
+		let json_str = r#"{
+			"jsonrpc": "2.0",
+			"id": 1,
+			"result": {
+				"content": [
+					{
+						"type": "text",
+						"text": "Hello, this is a clean message"
+					}
+				]
+			}
+		}"#;
+
+		let msg: ServerJsonRpcMessage =
+			serde_json::from_str(json_str).expect("Failed to parse test message");
+
+		let guards = create_pii_guard_executor(vec![PiiType::CreditCard], PiiAction::Mask);
+
+		let result = evaluate_server_message(&msg, &guards, "test-server", None, RequestId::Number(1));
+
+		let returned = result.expect("Should succeed");
+		let returned_json = serde_json::to_value(&returned).unwrap();
+		let text = returned_json["result"]["content"][0]["text"]
+			.as_str()
+			.unwrap();
+		assert_eq!(text, "Hello, this is a clean message");
+	}
 }

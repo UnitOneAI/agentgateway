@@ -7164,6 +7164,393 @@
                                         "conditional",
                                         null
                                       ]
+                                    },
+                                    "securityGuards": {
+                                      "description": "Security guards to apply to this MCP backend",
+                                      "type": "array",
+                                      "items": {
+                                        "description": "Security guard that can be applied to MCP protocol operations",
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "description": "Unique identifier for this guard",
+                                            "type": "string"
+                                          },
+                                          "description": {
+                                            "description": "Human-readable description",
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "priority": {
+                                            "description": "Execution priority (lower = runs first)",
+                                            "type": "integer",
+                                            "format": "uint32",
+                                            "minimum": 0,
+                                            "default": 100
+                                          },
+                                          "failure_mode": {
+                                            "description": "Behavior when guard fails to execute",
+                                            "oneOf": [
+                                              {
+                                                "description": "Block request on failure (secure default)",
+                                                "type": "string",
+                                                "const": "fail_closed"
+                                              },
+                                              {
+                                                "description": "Allow request on failure (availability over security)",
+                                                "type": "string",
+                                                "const": "fail_open"
+                                              }
+                                            ],
+                                            "default": "fail_closed"
+                                          },
+                                          "timeout_ms": {
+                                            "description": "Maximum time allowed for guard execution",
+                                            "type": "integer",
+                                            "format": "uint64",
+                                            "minimum": 0,
+                                            "default": 100
+                                          },
+                                          "runs_on": {
+                                            "description": "Which phases this guard runs on",
+                                            "type": "array",
+                                            "items": {
+                                              "description": "Execution phase for guards",
+                                              "oneOf": [
+                                                {
+                                                  "description": "Before forwarding client request to MCP server",
+                                                  "type": "string",
+                                                  "const": "request"
+                                                },
+                                                {
+                                                  "description": "After receiving response from MCP server",
+                                                  "type": "string",
+                                                  "const": "response"
+                                                },
+                                                {
+                                                  "description": "Specifically for tools/list responses",
+                                                  "type": "string",
+                                                  "const": "tools_list"
+                                                },
+                                                {
+                                                  "description": "Specifically for tool invocations (tools/call)",
+                                                  "type": "string",
+                                                  "const": "tool_invoke"
+                                                }
+                                              ]
+                                            },
+                                            "default": []
+                                          },
+                                          "enabled": {
+                                            "description": "Whether guard is enabled",
+                                            "type": "boolean",
+                                            "default": true
+                                          }
+                                        },
+                                        "required": [
+                                          "id"
+                                        ],
+                                        "oneOf": [
+                                          {
+                                            "description": "Tool Poisoning Detection (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "strict_mode": {
+                                                "description": "Enable strict mode (blocks on any suspicious pattern)",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "custom_patterns": {
+                                                "description": "Custom regex patterns to detect (in addition to built-in patterns)",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": []
+                                              },
+                                              "scan_fields": {
+                                                "description": "Fields to scan in tool metadata",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "name",
+                                                    "description",
+                                                    "input_schema"
+                                                  ]
+                                                },
+                                                "default": [
+                                                  "name",
+                                                  "description",
+                                                  "input_schema"
+                                                ]
+                                              },
+                                              "alert_threshold": {
+                                                "description": "Minimum number of pattern matches to trigger alert",
+                                                "type": "integer",
+                                                "format": "uint",
+                                                "minimum": 0,
+                                                "default": 1
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "tool_poisoning"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Rug Pull Detection (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "enabled": {
+                                                "description": "Enable baseline tracking",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "risk_threshold": {
+                                                "description": "Risk threshold for blocking (cumulative score triggers Deny)",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 5
+                                              },
+                                              "removal_weight": {
+                                                "description": "Risk weight for tool removal (default: 3 - high risk)",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 3
+                                              },
+                                              "schema_change_weight": {
+                                                "description": "Risk weight for schema changes (default: 3 - high risk)",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 3
+                                              },
+                                              "description_change_weight": {
+                                                "description": "Risk weight for description changes (default: 2 - medium risk)",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 2
+                                              },
+                                              "addition_weight": {
+                                                "description": "Risk weight for tool additions (default: 1 - low risk)",
+                                                "type": "integer",
+                                                "format": "uint32",
+                                                "minimum": 0,
+                                                "default": 1
+                                              },
+                                              "detect_changes": {
+                                                "description": "Enable/disable specific change type detection",
+                                                "type": "object",
+                                                "properties": {
+                                                  "removals": {
+                                                    "description": "Detect tool removals (default: true)",
+                                                    "type": "boolean",
+                                                    "default": true
+                                                  },
+                                                  "additions": {
+                                                    "description": "Detect tool additions (default: true)",
+                                                    "type": "boolean",
+                                                    "default": true
+                                                  },
+                                                  "description_changes": {
+                                                    "description": "Detect description changes (default: true)",
+                                                    "type": "boolean",
+                                                    "default": true
+                                                  },
+                                                  "schema_changes": {
+                                                    "description": "Detect schema changes (default: true)",
+                                                    "type": "boolean",
+                                                    "default": true
+                                                  }
+                                                },
+                                                "additionalProperties": false,
+                                                "default": {
+                                                  "removals": true,
+                                                  "additions": true,
+                                                  "description_changes": true,
+                                                  "schema_changes": true
+                                                }
+                                              },
+                                              "update_baseline_on_allow": {
+                                                "description": "Whether to update baseline after allowing changes below threshold",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "rug_pull"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Tool Shadowing Prevention (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "block_duplicates": {
+                                                "description": "Block duplicate tool names across servers",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "protected_names": {
+                                                "description": "Protected MCP protocol method names",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": [
+                                                  "initialize",
+                                                  "tools/list",
+                                                  "tools/call",
+                                                  "prompts/list",
+                                                  "prompts/get",
+                                                  "resources/list",
+                                                  "resources/read"
+                                                ]
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "tool_shadowing"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "Server Whitelist Enforcement (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "allowed_servers": {
+                                                "description": "List of allowed server names/IDs",
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                },
+                                                "default": []
+                                              },
+                                              "detect_typosquats": {
+                                                "description": "Detect typosquatting attempts",
+                                                "type": "boolean",
+                                                "default": true
+                                              },
+                                              "similarity_threshold": {
+                                                "description": "Similarity threshold for typo detection (0.0-1.0)",
+                                                "type": "number",
+                                                "format": "float",
+                                                "default": 0.8500000238418579
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "server_whitelist"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          },
+                                          {
+                                            "description": "PII Detection and Masking (native)",
+                                            "type": "object",
+                                            "properties": {
+                                              "detect": {
+                                                "description": "Which PII types to detect (defaults to all)",
+                                                "type": "array",
+                                                "items": {
+                                                  "description": "PII types that can be detected using the LLM PII recognizers",
+                                                  "oneOf": [
+                                                    {
+                                                      "description": "Email addresses",
+                                                      "type": "string",
+                                                      "const": "email"
+                                                    },
+                                                    {
+                                                      "description": "Phone numbers (US, GB, DE, IL, IN, CA, BR)",
+                                                      "type": "string",
+                                                      "const": "phone_number"
+                                                    },
+                                                    {
+                                                      "description": "US Social Security Numbers",
+                                                      "type": "string",
+                                                      "const": "ssn"
+                                                    },
+                                                    {
+                                                      "description": "Credit card numbers (Visa, Mastercard, Amex, Discover, Diners Club)",
+                                                      "type": "string",
+                                                      "const": "credit_card"
+                                                    },
+                                                    {
+                                                      "description": "Canadian Social Insurance Numbers",
+                                                      "type": "string",
+                                                      "const": "ca_sin"
+                                                    },
+                                                    {
+                                                      "description": "URLs (http/https)",
+                                                      "type": "string",
+                                                      "const": "url"
+                                                    }
+                                                  ]
+                                                },
+                                                "default": [
+                                                  "email",
+                                                  "phone_number",
+                                                  "ssn",
+                                                  "credit_card",
+                                                  "ca_sin",
+                                                  "url"
+                                                ]
+                                              },
+                                              "action": {
+                                                "description": "Action to take when PII is detected",
+                                                "oneOf": [
+                                                  {
+                                                    "description": "Mask detected PII with <ENTITY_TYPE> placeholder",
+                                                    "type": "string",
+                                                    "const": "mask"
+                                                  },
+                                                  {
+                                                    "description": "Reject the request/response entirely",
+                                                    "type": "string",
+                                                    "const": "reject"
+                                                  }
+                                                ],
+                                                "default": "mask"
+                                              },
+                                              "min_score": {
+                                                "description": "Minimum confidence score to trigger detection (0.0 - 1.0)",
+                                                "type": "number",
+                                                "format": "float",
+                                                "default": 0.30000001192092896
+                                              },
+                                              "rejection_message": {
+                                                "description": "Custom rejection message (only used when action is Reject)",
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "const": "pii"
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ]
+                                          }
+                                        ]
+                                      }
                                     }
                                   },
                                   "additionalProperties": false,

@@ -14,6 +14,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
 import { Loader2, Bot, Zap, Settings, RefreshCw } from "lucide-react";
 
 interface CapabilitiesListProps {
@@ -49,13 +50,14 @@ export function CapabilitiesList({
   return (
     <Card className="flex flex-col">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {connectionType === "a2a" ? (
-            <Bot className="h-5 w-5" />
-          ) : (
-            <Settings className="h-5 w-5" />
-          )}
-          {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            {connectionType === "a2a" ? (
+              <Bot className="h-5 w-5" />
+            ) : (
+              <Settings className="h-5 w-5" />
+            )}
+            {connectionType === "a2a" ? a2aAgentCard?.name || "Unknown Agent" : "Available Tools"}
           {connectionType === "mcp" && onRefreshMcpTools && (
             <Button
               variant="ghost"
@@ -67,7 +69,14 @@ export function CapabilitiesList({
               <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
           )}
-        </CardTitle>
+          </CardTitle>
+          {connectionType === "mcp" && onRefreshMcpTools && (
+            <Button variant="outline" size="sm" onClick={onRefreshMcpTools} disabled={isLoading}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          )}
+        </div>
         <CardDescription>
           {connectionType === "a2a" ? a2aAgentCard?.description || "Unknown Agent" : description}
         </CardDescription>

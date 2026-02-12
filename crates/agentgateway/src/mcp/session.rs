@@ -168,6 +168,9 @@ impl Session {
 			}) if req_id.is_some() => {
 				Err(mcp::Error::Authorization(req_id.unwrap(), resource_type, resource_name).into())
 			},
+			Err(UpstreamError::SecurityGuard { code, message }) if req_id.is_some() => {
+				Err(mcp::Error::SecurityGuard(req_id.unwrap(), code, message).into())
+			},
 			// TODO: this is too broad. We have a big tangle of errors to untangle though
 			Err(e) => Err(mcp::Error::SendError(req_id, e.to_string()).into()),
 		}
@@ -197,6 +200,10 @@ impl Session {
 				});
 				match &mut r.request {
 					ClientRequest::InitializeRequest(ir) => {
+						// Reset security guard state on session re-initialization
+						// This clears baselines so rug pull detection starts fresh
+						self.relay.reset_all_security_guards();
+
 						if self.relay.is_multiplexing() {
 							// Currently, we cannot support roots until we have a mapping of downstream and upstream ID.
 							// However, the clients can tell the server they support roots.
@@ -209,12 +216,13 @@ impl Session {
 							.relay
 							.send_fanout(
 								r,
-								ctx,
+								ctx.clone(),
 								self
 									.relay
 									.merge_initialize(pv, self.relay.is_multiplexing()),
 							)
 							.await;
+
 						if let Some(sessions) = self.relay.get_sessions() {
 							let s = http::sessionpersistence::SessionState::MCP(
 								http::sessionpersistence::MCPSessionState { sessions },
@@ -304,9 +312,61 @@ impl Session {
 							});
 						}
 
+						// Evaluate security guards on tool invocation
+						let arguments_value = ctr
+							.params
+							.arguments
+							.as_ref()
+							.map(|m| serde_json::Value::Object(m.clone()))
+							.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+						match self
+							.relay
+							.evaluate_tool_invoke(tool, &arguments_value, service_name, None)
+						{
+							Ok(mcp::security::GuardDecision::Allow) => {
+								// Continue with the request
+							},
+							Ok(mcp::security::GuardDecision::Deny(reason)) => {
+								tracing::warn!(
+									tool = %tool,
+									code = %reason.code,
+									message = %reason.message,
+									"Security guard denied tool invocation"
+								);
+								return Err(UpstreamError::SecurityGuard {
+									code: reason.code,
+									message: reason.message,
+								});
+							},
+							Ok(mcp::security::GuardDecision::Modify(mcp::security::ModifyAction::Transform(
+								modified,
+							))) => {
+								// Apply the modified arguments
+								if let serde_json::Value::Object(map) = modified {
+									ctr.params.arguments = Some(map);
+								}
+							},
+							Ok(mcp::security::GuardDecision::Modify(_)) => {
+								// Other modify actions not supported for tool invoke
+								tracing::warn!("Unsupported modify action for tool invocation");
+							},
+							Err(e) => {
+								tracing::error!(error = %e, "Security guard execution failed");
+								return Err(UpstreamError::SecurityGuard {
+									code: "guard_error".to_string(),
+									message: e.to_string(),
+								});
+							},
+						}
+
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
-						self.relay.send_single(r, ctx, service_name).await
+						// Use guarded send to evaluate responses for PII and other security checks
+						self
+							.relay
+							.send_single_guarded(r, ctx, service_name, true, None)
+							.await
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();
@@ -379,6 +439,10 @@ impl Session {
 				}
 			},
 			ClientJsonRpcMessage::Notification(r) => {
+				let is_initialized = matches!(
+					&r.notification,
+					ClientNotification::InitializedNotification(_)
+				);
 				let method = match &r.notification {
 					ClientNotification::CancelledNotification(r) => r.method.as_str(),
 					ClientNotification::ProgressNotification(r) => r.method.as_str(),
@@ -395,7 +459,20 @@ impl Session {
 				});
 				// TODO: the notification needs to be fanned out in some cases and sent to a single one in others
 				// however, we don't have a way to map to the correct service yet
-				self.relay.send_notification(r, ctx).await
+				let res = self.relay.send_notification(r, ctx.clone()).await;
+
+				// After the initialized notification has been forwarded upstream,
+				// spawn background task to establish security baselines.
+				// This must happen after initialized (not after initialize) to
+				// avoid sending tools/list before the upstream session is ready.
+				if is_initialized {
+					let relay = self.relay.clone();
+					tokio::spawn(async move {
+						relay.establish_security_baselines(ctx).await;
+					});
+				}
+
+				res
 			},
 
 			_ => Err(UpstreamError::InvalidRequest(
