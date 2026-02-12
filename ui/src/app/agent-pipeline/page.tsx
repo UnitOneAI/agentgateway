@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,7 +13,6 @@ import {
   Settings,
   Clock,
   AlertCircle,
-  CheckCircle2,
   Shield,
   FileCheck,
   Bug,
@@ -196,7 +195,9 @@ export default function AgentPipelinePage() {
       develop: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100",
       deploy: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100",
     };
-    return <Badge className={colors[phase]}>{phase.charAt(0).toUpperCase() + phase.slice(1)}</Badge>;
+    return (
+      <Badge className={colors[phase]}>{phase.charAt(0).toUpperCase() + phase.slice(1)}</Badge>
+    );
   };
 
   const getPhaseIcon = (phase: Phase) => {
@@ -207,17 +208,6 @@ export default function AgentPipelinePage() {
         return <Code2 className="h-6 w-6" />;
       case "deploy":
         return <Rocket className="h-6 w-6" />;
-    }
-  };
-
-  const getPhaseColor = (phase: Phase) => {
-    switch (phase) {
-      case "design":
-        return "bg-blue-500";
-      case "develop":
-        return "bg-yellow-500";
-      case "deploy":
-        return "bg-green-500";
     }
   };
 
@@ -266,9 +256,7 @@ export default function AgentPipelinePage() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold capitalize">{phase}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {stats.total} agents
-                        </span>
+                        <span className="text-sm text-muted-foreground">{stats.total} agents</span>
                       </div>
                       <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
                         <span className="flex items-center gap-1">
@@ -284,9 +272,7 @@ export default function AgentPipelinePage() {
                   </div>
                 </CardContent>
               </Card>
-              {index < 2 && (
-                <ArrowRight className="h-6 w-6 mx-2 text-muted-foreground" />
-              )}
+              {index < 2 && <ArrowRight className="h-6 w-6 mx-2 text-muted-foreground" />}
             </div>
           );
         })}
@@ -361,10 +347,7 @@ export default function AgentPipelinePage() {
               currently holding.
             </p>
           </div>
-          <Tabs
-            value={activeFilter}
-            onValueChange={(v) => setActiveFilter(v as "all" | Phase)}
-          >
+          <Tabs value={activeFilter} onValueChange={(v) => setActiveFilter(v as "all" | Phase)}>
             <TabsList>
               <TabsTrigger value="all">All</TabsTrigger>
               <TabsTrigger value="design">Design</TabsTrigger>
@@ -397,9 +380,7 @@ export default function AgentPipelinePage() {
                         {getStatusBadge(agent.status)}
                         {getPhaseBadge(agent.phase)}
                       </div>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        {agent.shortDescription}
-                      </p>
+                      <p className="text-sm text-muted-foreground mb-2">{agent.shortDescription}</p>
                       <p className="text-sm text-muted-foreground mb-3">{agent.description}</p>
                       {agent.holdingContext && (
                         <div className="flex items-center gap-2 mb-3">
@@ -460,9 +441,7 @@ export default function AgentPipelinePage() {
                 automated security remediation.
               </p>
             </div>
-            <Button variant="outline">
-              View Synthesis Documentation
-            </Button>
+            <Button variant="outline">View Synthesis Documentation</Button>
           </div>
         </CardContent>
       </Card>
