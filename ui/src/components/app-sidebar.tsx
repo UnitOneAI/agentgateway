@@ -26,7 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, Home, Shield, Headphones, Server, Code, Settings, Route } from "lucide-react";
+import { Loader2, Home, Shield, Headphones, Server, Code, Settings, Route, Workflow } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { useWizard } from "@/lib/wizard-context";
 import { toast } from "sonner";
@@ -165,6 +165,17 @@ export function AppSidebar({ setActiveView }: AppSidebarProps) {
                 >
                   <Code className="h-4 w-4" />
                   <span>Playground</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Agent Pipeline"
+                  isActive={pathname === "/agent-pipeline"}
+                  onClick={() => navigateTo("/agent-pipeline")}
+                  aria-label="Agent Pipeline"
+                >
+                  <Workflow className="h-4 w-4" />
+                  <span>Agent Pipeline</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
