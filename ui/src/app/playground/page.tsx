@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport as McpHttpTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEClientTransport as McpSseTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import {
   ClientRequest as McpClientRequest,
   Result as McpResult,
@@ -247,21 +247,9 @@ export default function PlaygroundPage() {
         if (listener.routes) {
           listener.routes.forEach((route: Route, routeIndex: number) => {
             const protocol = listener.protocol === ListenerProtocol.HTTPS ? "https" : "http";
-            // Use window.location.hostname when listener hostname is not set
-            // This ensures the UI connects to the correct domain in deployed environments
-            const hostname =
-              listener.hostname ||
-              (typeof window !== "undefined" ? window.location.hostname : "localhost");
-            const configPort = bind.port;
-            // Local dev: browser URL has explicit port (e.g., 127.0.0.1:15000) -> use config port for routes
-            // Deployed (Azure): browser URL has no port (standard 80/443) -> use origin (ingress handles routing)
-            // Drawback: if Azure exposed non-standard port, this would break (uncommon scenario)
-            const hasExplicitPort = typeof window !== "undefined" && window.location.port !== "";
-            const baseEndpoint = hasExplicitPort
-              ? `${protocol}://${hostname}:${configPort}`
-              : typeof window !== "undefined"
-                ? window.location.origin
-                : `${protocol}://${hostname}:${configPort}`;
+            const hostname = listener.hostname || "localhost";
+            const port = bind.port; // Use the actual port from the bind configuration
+            const baseEndpoint = `${protocol}://${hostname}:${port}`;
 
             // Generate route path and description with better pattern recognition
             let routePath = "/";
@@ -476,10 +464,18 @@ export default function PlaygroundPage() {
           headers["Authorization"] = `Bearer ${connectionState.authToken}`;
         }
 
-        const mcpUrl = selectedRoute.endpoint.endsWith("/")
-          ? selectedRoute.endpoint.slice(0, -1)
-          : selectedRoute.endpoint;
-        const transport = new McpHttpTransport(new URL(mcpUrl), {
+        const sseUrl = selectedRoute.endpoint.endsWith("/")
+          ? `${selectedRoute.endpoint}sse`
+          : `${selectedRoute.endpoint}/sse`;
+        const transport = new McpSseTransport(new URL(sseUrl), {
+          eventSourceInit: {
+            fetch: (url, init) => {
+              return fetch(url, {
+                ...init,
+                headers: headers as HeadersInit,
+              });
+            },
+          },
           requestInit: {
             headers: headers as HeadersInit,
             credentials: "omit",
@@ -489,15 +485,13 @@ export default function PlaygroundPage() {
 
         await client.connect(transport);
         setMcpState((prev) => ({ ...prev, client }));
+        setConnectionState((prev) => ({ ...prev, isConnected: true }));
+        toast.success("Connected to MCP endpoint");
 
         setUiState((prev) => ({ ...prev, isLoadingCapabilities: true }));
         const listToolsRequest: McpClientRequest = { method: "tools/list", params: {} };
         const toolsResponse = await client.request(listToolsRequest, McpListToolsResultSchema);
         setMcpState((prev) => ({ ...prev, tools: toolsResponse.tools }));
-
-        // Only mark as connected and show success after tools are loaded successfully
-        setConnectionState((prev) => ({ ...prev, isConnected: true }));
-        toast.success("Connected to MCP endpoint");
       } else if (backendType === "a2a") {
         // Connect to A2A endpoint
         setConnectionState((prev) => ({ ...prev, connectionType: "a2a" }));
@@ -746,41 +740,15 @@ export default function PlaygroundPage() {
           arguments: mcpState.paramValues,
         },
       };
-
       const result = await mcpState.client.request(request, McpToolResponseSchema);
-
       setMcpState((prev) => ({ ...prev, response: result }));
       toast.success(`Tool ${mcpState.selectedTool?.name} executed.`);
     } catch (error: any) {
-      const message =
-        error instanceof McpError ? error.message : error?.message || "Failed to run tool";
+      const message = error instanceof McpError ? error.message : "Failed to run tool";
       setMcpState((prev) => ({ ...prev, response: { error: message, details: error } }));
       toast.error(message);
     } finally {
       setUiState((prev) => ({ ...prev, isRequestRunning: false }));
-    }
-  };
-
-  const refreshMcpTools = async () => {
-    if (!mcpState.client) return;
-
-    setUiState((prev) => ({ ...prev, isLoadingCapabilities: true }));
-    try {
-      // Call tools/list through the existing gateway connection
-      // The gateway will re-fetch from all configured MCP targets
-      const listToolsRequest: McpClientRequest = { method: "tools/list", params: {} };
-      const toolsResponse = await mcpState.client.request(
-        listToolsRequest,
-        McpListToolsResultSchema
-      );
-      setMcpState((prev) => ({ ...prev, tools: toolsResponse.tools }));
-      toast.success(`Refreshed tools list (${toolsResponse.tools.length} tools)`);
-    } catch (error: any) {
-      const message =
-        error instanceof McpError ? error.message : error?.message || "Failed to refresh tools";
-      toast.error(message);
-    } finally {
-      setUiState((prev) => ({ ...prev, isLoadingCapabilities: false }));
     }
   };
 
@@ -1097,7 +1065,8 @@ export default function PlaygroundPage() {
                     <span className="font-medium text-sm">Request URL</span>
                   </div>
                   <div className="font-mono text-sm break-all">
-                    {selectedRoute.endpoint}
+                    {selectedRoute.protocol}://{selectedRoute.listener.hostname || "localhost"}:
+                    {selectedRoute.bindPort}
                     {request.path}
                   </div>
                 </div>
@@ -1467,7 +1436,6 @@ export default function PlaygroundPage() {
             selectedA2aSkillId={a2aState.selectedSkill?.id ?? null}
             onMcpToolSelect={handleMcpToolSelect}
             onA2aSkillSelect={handleA2aSkillSelect}
-            onRefreshMcpTools={refreshMcpTools}
           />
 
           <ActionPanel
