@@ -17,7 +17,7 @@ use tower_http::cors::CorsLayer;
 use tower_serve_static::ServeDir;
 
 use crate::management::admin::{AdminFallback, AdminResponse};
-use crate::mcp::security::McpGuardKind;
+use crate::mcp::security::{McpGuardKind, McpSecurityGuard};
 use crate::{Config, ConfigSource, client, yamlviajson};
 
 pub struct UiHandler {
@@ -156,69 +156,91 @@ async fn get_guard_schemas(State(app): State<App>) -> Result<Json<Value>, ErrorR
 /// matching the GuardSchemasResponse format expected by the frontend.
 #[allow(unused_variables)]
 fn collect_wasm_schemas_from_config(config: &Value, schemas: &mut serde_json::Map<String, Value>) {
-	// Navigate: backends[] -> mcp -> security_guards[]
-	let Some(backends) = config.get("backends").and_then(|v| v.as_array()) else {
+	// Navigate: binds[] -> listeners[] -> routes[] -> backends[] -> mcp -> securityGuards[]
+	let Some(binds) = config.get("binds").and_then(|v| v.as_array()) else {
 		return;
 	};
 
-	for backend in backends {
-		let Some(mcp) = backend.get("mcp") else {
+	for bind in binds {
+		let Some(listeners) = bind.get("listeners").and_then(|v| v.as_array()) else {
 			continue;
 		};
-		let Some(guards) = mcp.get("security_guards").and_then(|v| v.as_array()) else {
+		for listener in listeners {
+			let Some(routes) = listener.get("routes").and_then(|v| v.as_array()) else {
+				continue;
+			};
+			for route in routes {
+				let Some(backends) = route.get("backends").and_then(|v| v.as_array()) else {
+					continue;
+				};
+				for backend in backends {
+					let Some(mcp) = backend.get("mcp") else {
+						continue;
+					};
+					let Some(guards) = mcp.get("securityGuards").and_then(|v| v.as_array()) else {
+						continue;
+					};
+					collect_wasm_schemas_from_guards(guards, schemas);
+				}
+			}
+		}
+	}
+}
+
+/// Extract schemas from a list of guard config values.
+#[allow(unused_variables)]
+fn collect_wasm_schemas_from_guards(guards: &[Value], schemas: &mut serde_json::Map<String, Value>) {
+	for guard_val in guards {
+		let Some(guard_type) = guard_val.get("type").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		if guard_type != "wasm" {
+			continue;
+		}
+
+		let Some(guard_id) = guard_val.get("id").and_then(|v| v.as_str()) else {
 			continue;
 		};
 
-		for guard_val in guards {
-			let Some(guard_type) = guard_val.get("type").and_then(|v| v.as_str()) else {
-				continue;
-			};
-			if guard_type != "wasm" {
-				continue;
+		// Deserialize as full McpSecurityGuard (which flattens McpGuardKind),
+		// then extract .kind to get WasmGuardConfig
+		if let Ok(guard) = serde_json::from_value::<McpSecurityGuard>(guard_val.clone()) {
+			let kind = guard.kind;
+			#[cfg(feature = "wasm-guards")]
+			if let McpGuardKind::Wasm(wasm_cfg) = kind {
+				match crate::mcp::security::wasm::WasmGuard::new(guard_id.to_string(), wasm_cfg) {
+					Ok(wasm_guard) => {
+						if let Ok(schema_str) = wasm_guard.get_settings_schema() {
+							if let Ok(schema_val) = serde_json::from_str::<Value>(&schema_str) {
+								// Use x-guard-meta.guardType as key, fall back to guard id
+								let schema_key = schema_val
+									.get("x-guard-meta")
+									.and_then(|m| m.get("guardType"))
+									.and_then(|v| v.as_str())
+									.unwrap_or(guard_id)
+									.to_string();
+
+								schemas.insert(schema_key, schema_val);
+							}
+						}
+					},
+					Err(e) => {
+						tracing::warn!(
+							guard_id = guard_id,
+							error = %e,
+							"Failed to load WASM guard for schema extraction"
+						);
+					},
+				}
 			}
 
-			let Some(guard_id) = guard_val.get("id").and_then(|v| v.as_str()) else {
-				continue;
-			};
-
-			// Try to deserialize as McpGuardKind to get WasmGuardConfig
-			if let Ok(kind) = serde_json::from_value::<McpGuardKind>(guard_val.clone()) {
-				#[cfg(feature = "wasm-guards")]
-				if let McpGuardKind::Wasm(wasm_cfg) = kind {
-					match crate::mcp::security::wasm::WasmGuard::new(guard_id.to_string(), wasm_cfg) {
-						Ok(wasm_guard) => {
-							if let Ok(schema_str) = wasm_guard.get_settings_schema() {
-								if let Ok(schema_val) = serde_json::from_str::<Value>(&schema_str) {
-									// Use x-guard-meta.guardType as key, fall back to guard id
-									let schema_key = schema_val
-										.get("x-guard-meta")
-										.and_then(|m| m.get("guardType"))
-										.and_then(|v| v.as_str())
-										.unwrap_or(guard_id)
-										.to_string();
-
-									schemas.insert(schema_key, schema_val);
-								}
-							}
-						},
-						Err(e) => {
-							tracing::warn!(
-								guard_id = guard_id,
-								error = %e,
-								"Failed to load WASM guard for schema extraction"
-							);
-						},
-					}
-				}
-
-				#[cfg(not(feature = "wasm-guards"))]
-				{
-					let _ = kind;
-					tracing::debug!(
-						guard_id = guard_id,
-						"WASM guards feature not enabled, skipping schema extraction"
-					);
-				}
+			#[cfg(not(feature = "wasm-guards"))]
+			{
+				let _ = kind;
+				tracing::debug!(
+					guard_id = guard_id,
+					"WASM guards feature not enabled, skipping schema extraction"
+				);
 			}
 		}
 	}

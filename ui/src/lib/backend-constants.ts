@@ -232,6 +232,7 @@ export const SECURITY_GUARD_TYPES: Array<{
 
 // Guard phases for UI selection
 export const GUARD_PHASES: Array<{ value: GuardPhase; label: string }> = [
+  { value: "connection", label: "Connection" },
   { value: "request", label: "Request" },
   { value: "response", label: "Response" },
   { value: "tools_list", label: "Tools List" },

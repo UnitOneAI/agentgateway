@@ -171,6 +171,36 @@ impl Relay {
 		tracing::info!("Establishing security guard baselines for all upstreams");
 
 		for (server_name, upstream) in self.upstreams.iter_named() {
+			// Evaluate connection phase guards (whitelist, typosquat detection)
+			let context = crate::mcp::security::GuardContext {
+				server_name: server_name.to_string(),
+				identity: None,
+				metadata: serde_json::Value::Null,
+			};
+			match self.security_guards.evaluate_connection(&server_name, None, &context) {
+				Ok(crate::mcp::security::GuardDecision::Allow) => {
+					tracing::info!(server = %server_name, "Connection guard: allowed");
+				},
+				Ok(crate::mcp::security::GuardDecision::Deny(reason)) => {
+					tracing::warn!(
+						server = %server_name,
+						code = %reason.code,
+						message = %reason.message,
+						"Connection guard: BLOCKED server"
+					);
+					continue; // Skip this upstream entirely
+				},
+				Ok(_) => {},
+				Err(e) => {
+					tracing::error!(
+						server = %server_name,
+						error = %e,
+						"Connection guard: error"
+					);
+					continue; // Skip on error (fail closed)
+				},
+			}
+
 			// Create a tools/list request
 			let request = JsonRpcRequest {
 				jsonrpc: Default::default(),
@@ -263,6 +293,12 @@ impl Relay {
 
 			// Process each server's tools individually for security guard evaluation
 			for (server_name, s) in streams.into_iter() {
+				let context = crate::mcp::security::GuardContext {
+					server_name: server_name.to_string(),
+					identity: None,
+					metadata: serde_json::Value::Null,
+				};
+
 				let tools = match s {
 					ServerResult::ListToolsResult(ltr) => ltr.tools,
 					_ => vec![],
@@ -270,11 +306,6 @@ impl Relay {
 
 				// Execute security guards on this server's tools list BEFORE merging
 				// This ensures baselines are stored per-server, not under "merged"
-				let context = crate::mcp::security::GuardContext {
-					server_name: server_name.to_string(),
-					identity: None,
-					metadata: serde_json::Value::Null,
-				};
 
 				match security_guards.evaluate_tools_list(&tools, &context) {
 					Ok(crate::mcp::security::GuardDecision::Allow) => {

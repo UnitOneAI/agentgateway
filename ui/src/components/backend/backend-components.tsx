@@ -67,6 +67,8 @@ import {
   PII_ACTIONS,
   SCAN_FIELDS,
 } from "@/lib/backend-constants";
+import { SchemaForm } from "@/components/schema-form";
+import { useGuardSchemas } from "@/hooks/useGuardSchemas";
 import type { SecurityGuard, SecurityGuardType } from "@/lib/types";
 import {
   getBackendType,
@@ -718,6 +720,7 @@ const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = React.useState(guards.length > 0);
   const [expandedGuards, setExpandedGuards] = React.useState<Set<number>>(new Set());
+  const { schemas } = useGuardSchemas();
 
   const toggleGuardExpanded = (index: number) => {
     setExpandedGuards((prev) => {
@@ -1257,35 +1260,70 @@ const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
                             />
                           </div>
                         </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Config (key=value per line)</Label>
-                          <textarea
-                            value={Object.entries(guard.config || {})
-                              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-                              .join("\n")}
-                            onChange={(e) => {
-                              const configObj: Record<string, unknown> = {};
-                              e.target.value.split("\n").forEach((line) => {
-                                const eqIdx = line.indexOf("=");
-                                if (eqIdx > 0) {
-                                  const key = line.slice(0, eqIdx).trim();
-                                  const valStr = line.slice(eqIdx + 1).trim();
-                                  try {
-                                    configObj[key] = JSON.parse(valStr);
-                                  } catch {
-                                    configObj[key] = valStr;
-                                  }
-                                }
+                        {/* Schema-driven config form or JSON fallback */}
+                        {(() => {
+                          // For WASM guards, match schema by module_path filename or guardType
+                          const guardSchema = (() => {
+                            // Direct match by guard id
+                            if (schemas[guard.id]) return schemas[guard.id];
+
+                            if (guard.type === "wasm" && guard.module_path) {
+                              // Extract base name: "server_spoofing_guard.wasm" -> "server_spoofing"
+                              const filename =
+                                guard.module_path
+                                  .split("/")
+                                  .pop()
+                                  ?.replace(/_guard\.wasm$/, "")
+                                  .replace(/\.wasm$/, "") || "";
+
+                              // Match against x-guard-meta.guardType
+                              const byGuardType = Object.entries(schemas).find(([key, s]) => {
+                                const gt = s["x-guard-meta"]?.guardType;
+                                return gt === filename || key === filename;
                               });
-                              updateSecurityGuardField(index, "config", configObj);
-                            }}
-                            placeholder={'sensitivity="high"\ndeny_threshold=0.5'}
-                            className="w-full h-20 px-2 py-1 text-sm border rounded-md font-mono"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Values are JSON-parsed (use quotes for strings)
-                          </p>
-                        </div>
+                              if (byGuardType) return byGuardType[1];
+                            }
+
+                            // Fallback: match by guardType === guard.id
+                            return Object.values(schemas).find(
+                              (s) => s["x-guard-meta"]?.guardType === guard.id
+                            );
+                          })();
+
+                          if (guardSchema) {
+                            return (
+                              <SchemaForm
+                                schema={guardSchema}
+                                value={guard.config || {}}
+                                onChange={(newConfig) =>
+                                  updateSecurityGuardField(index, "config", newConfig)
+                                }
+                              />
+                            );
+                          }
+
+                          return (
+                            <div className="space-y-1">
+                              <Label className="text-xs">Config (JSON)</Label>
+                              <textarea
+                                value={JSON.stringify(guard.config || {}, null, 2)}
+                                onChange={(e) => {
+                                  try {
+                                    updateSecurityGuardField(
+                                      index,
+                                      "config",
+                                      JSON.parse(e.target.value)
+                                    );
+                                  } catch {
+                                    /* ignore parse errors while typing */
+                                  }
+                                }}
+                                placeholder="{}"
+                                className="w-full h-32 px-2 py-1 text-sm border rounded-md font-mono"
+                              />
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>

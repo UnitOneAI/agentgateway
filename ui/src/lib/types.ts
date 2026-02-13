@@ -498,7 +498,7 @@ export interface ListenerInfo extends Listener {
 // =============================================================================
 
 // Guard phase types (matches Rust GuardPhase enum)
-export type GuardPhase = "request" | "response" | "tools_list" | "tool_invoke";
+export type GuardPhase = "connection" | "request" | "response" | "tools_list" | "tool_invoke";
 
 // Failure mode (matches Rust FailureMode enum)
 export type FailureMode = "fail_closed" | "fail_open";

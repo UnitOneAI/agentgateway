@@ -98,6 +98,21 @@ impl Guest for SimplePatternGuard {
         Ok(Decision::Allow)
     }
 
+    fn evaluate_tool_invoke(
+        _tool_name: String,
+        _arguments: String,
+        _context: GuardContext,
+    ) -> Result<Decision, String> {
+        Ok(Decision::Allow)
+    }
+
+    fn evaluate_response(
+        _response: String,
+        _context: GuardContext,
+    ) -> Result<Decision, String> {
+        Ok(Decision::Allow)
+    }
+
     fn get_settings_schema() -> String {
         serde_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",

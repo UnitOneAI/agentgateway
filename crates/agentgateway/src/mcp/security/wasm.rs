@@ -602,27 +602,179 @@ impl NativeGuard for WasmGuard {
 		arguments: &serde_json::Value,
 		context: &GuardContext,
 	) -> GuardResult {
-		// Default implementation - WASM guards primarily target tools_list evaluation
-		// This can be extended if the WIT interface is updated to support tool invocation
-		tracing::debug!(
-				guard_id = %self.guard_id,
-				tool_name = %tool_name,
-				server = %context.server_name,
-				"WASM guard evaluate_tool_invoke called (default allow)"
-		);
-		let _ = (tool_name, arguments, context);
-		Ok(GuardDecision::Allow)
+		self.execute_with_timeout(|| {
+			tracing::debug!(
+					guard_id = %self.guard_id,
+					tool_name = %tool_name,
+					server = %context.server_name,
+					"Evaluating tool invocation with WASM guard"
+			);
+
+			let linker = self.create_linker()?;
+			let state = WasmState::new(self.config.config.clone());
+			let mut store = Store::new(&self.engine, state);
+
+			let instance = linker
+				.instantiate(&mut store, &self.component)
+				.map_err(|e| GuardError::WasmError(format!("Failed to instantiate component: {}", e)))?;
+
+			let guard_export_idx = instance
+				.get_export(&mut store, None, "mcp:security-guard/guard@0.1.0")
+				.ok_or_else(|| {
+					GuardError::WasmError("Guard interface not found in component exports".to_string())
+				})?;
+
+			// Try to get evaluate-tool-invoke — if not exported, allow (backward compat)
+			let func_export_idx = match instance.get_export(
+				&mut store,
+				Some(&guard_export_idx),
+				"evaluate-tool-invoke",
+			) {
+				Some(idx) => idx,
+				None => {
+					tracing::debug!(
+						guard_id = %self.guard_id,
+						"WASM guard does not export evaluate-tool-invoke, allowing"
+					);
+					return Ok(GuardDecision::Allow);
+				},
+			};
+
+			let func = instance
+				.get_func(&mut store, &func_export_idx)
+				.ok_or_else(|| {
+					GuardError::WasmError("Could not get function from export index".to_string())
+				})?;
+
+			let tool_name_val = Val::String(tool_name.to_string().into());
+			let arguments_val = Val::String(
+				serde_json::to_string(arguments)
+					.unwrap_or_else(|_| "{}".to_string())
+					.into(),
+			);
+			let context_record = Val::Record(vec![
+				(
+					"server-name".into(),
+					Val::String(context.server_name.clone().into()),
+				),
+				("server-url".into(), Val::Option(None)),
+				(
+					"identity".into(),
+					match &context.identity {
+						Some(id) => Val::Option(Some(Box::new(Val::String(id.clone().into())))),
+						None => Val::Option(None),
+					},
+				),
+				(
+					"metadata".into(),
+					Val::String(
+						serde_json::to_string(&context.metadata)
+							.unwrap_or_else(|_| "{}".to_string())
+							.into(),
+					),
+				),
+			]);
+
+			let mut results = vec![Val::Bool(false)];
+			func
+				.call(
+					&mut store,
+					&[tool_name_val, arguments_val, context_record],
+					&mut results,
+				)
+				.map_err(|e| GuardError::WasmError(format!("WASM function call failed: {}", e)))?;
+
+			func
+				.post_return(&mut store)
+				.map_err(|e| GuardError::WasmError(format!("WASM post-return failed: {}", e)))?;
+
+			Self::parse_decision(&results)
+		})
 	}
 
 	fn evaluate_response(&self, response: &serde_json::Value, context: &GuardContext) -> GuardResult {
-		// Default implementation - can be extended if WIT interface supports response evaluation
-		tracing::debug!(
-				guard_id = %self.guard_id,
-				server = %context.server_name,
-				"WASM guard evaluate_response called (default allow)"
-		);
-		let _ = (response, context);
-		Ok(GuardDecision::Allow)
+		self.execute_with_timeout(|| {
+			tracing::debug!(
+					guard_id = %self.guard_id,
+					server = %context.server_name,
+					"Evaluating response with WASM guard"
+			);
+
+			let linker = self.create_linker()?;
+			let state = WasmState::new(self.config.config.clone());
+			let mut store = Store::new(&self.engine, state);
+
+			let instance = linker
+				.instantiate(&mut store, &self.component)
+				.map_err(|e| GuardError::WasmError(format!("Failed to instantiate component: {}", e)))?;
+
+			let guard_export_idx = instance
+				.get_export(&mut store, None, "mcp:security-guard/guard@0.1.0")
+				.ok_or_else(|| {
+					GuardError::WasmError("Guard interface not found in component exports".to_string())
+				})?;
+
+			// Try to get evaluate-response — if not exported, allow (backward compat)
+			let func_export_idx = match instance.get_export(
+				&mut store,
+				Some(&guard_export_idx),
+				"evaluate-response",
+			) {
+				Some(idx) => idx,
+				None => {
+					tracing::debug!(
+						guard_id = %self.guard_id,
+						"WASM guard does not export evaluate-response, allowing"
+					);
+					return Ok(GuardDecision::Allow);
+				},
+			};
+
+			let func = instance
+				.get_func(&mut store, &func_export_idx)
+				.ok_or_else(|| {
+					GuardError::WasmError("Could not get function from export index".to_string())
+				})?;
+
+			let response_val = Val::String(
+				serde_json::to_string(response)
+					.unwrap_or_else(|_| "{}".to_string())
+					.into(),
+			);
+			let context_record = Val::Record(vec![
+				(
+					"server-name".into(),
+					Val::String(context.server_name.clone().into()),
+				),
+				("server-url".into(), Val::Option(None)),
+				(
+					"identity".into(),
+					match &context.identity {
+						Some(id) => Val::Option(Some(Box::new(Val::String(id.clone().into())))),
+						None => Val::Option(None),
+					},
+				),
+				(
+					"metadata".into(),
+					Val::String(
+						serde_json::to_string(&context.metadata)
+							.unwrap_or_else(|_| "{}".to_string())
+							.into(),
+					),
+				),
+			]);
+
+			let mut results = vec![Val::Bool(false)];
+			func
+				.call(&mut store, &[response_val, context_record], &mut results)
+				.map_err(|e| GuardError::WasmError(format!("WASM function call failed: {}", e)))?;
+
+			func
+				.post_return(&mut store)
+				.map_err(|e| GuardError::WasmError(format!("WASM post-return failed: {}", e)))?;
+
+			Self::parse_decision(&results)
+		})
 	}
 
 	fn evaluate_connection(

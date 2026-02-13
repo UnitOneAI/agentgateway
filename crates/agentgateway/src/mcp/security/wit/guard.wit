@@ -43,6 +43,15 @@ interface guard {
     /// Evaluate tools/list response
     evaluate-tools-list: func(tools: list<tool>, context: guard-context) -> result<decision, string>;
 
+    /// Evaluate a tool invocation (tools/call) before execution
+    /// tool-name: name of the tool being invoked
+    /// arguments: JSON-serialized tool arguments
+    evaluate-tool-invoke: func(tool-name: string, arguments: string, context: guard-context) -> result<decision, string>;
+
+    /// Evaluate a response from the MCP server
+    /// response: JSON-serialized response content
+    evaluate-response: func(response: string, context: guard-context) -> result<decision, string>;
+
     /// Get JSON Schema describing guard's configurable parameters
     /// Returns JSON-serialized JSON Schema (Draft 2020-12)
     /// Schema describes guard-specific settings only (not common settings like priority, timeout)
