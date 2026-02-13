@@ -187,8 +187,8 @@ export const DEFAULT_WASM_GUARD: WasmGuard = {
   type: "wasm",
   runs_on: ["response", "tools_list"],
   module_path: "",
-  max_memory_bytes: 10 * 1024 * 1024, // 10 MB
-  max_fuel: 1_000_000, // 1 million instructions
+  max_memory: 10 * 1024 * 1024, // 10 MB
+  max_wasm_stack: 2 * 1024 * 1024, // 2 MB
   config: {},
 };
 

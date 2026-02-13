@@ -575,8 +575,8 @@ export interface PiiGuard extends SecurityGuardBase {
 export interface WasmGuard extends SecurityGuardBase {
   type: "wasm";
   module_path: string;
-  max_memory_bytes: number;
-  max_fuel: number;
+  max_memory: number;
+  max_wasm_stack: number;
   config: Record<string, unknown>;
 }
 

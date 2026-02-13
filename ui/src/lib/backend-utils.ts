@@ -551,8 +551,8 @@ export const convertSecurityGuardsToConfig = (guards: SecurityGuard[]): any[] =>
 
       case "wasm":
         config.module_path = guard.module_path;
-        config.max_memory_bytes = guard.max_memory_bytes;
-        config.max_fuel = guard.max_fuel;
+        config.max_memory = guard.max_memory;
+        config.max_wasm_stack = guard.max_wasm_stack;
         if (guard.config && Object.keys(guard.config).length > 0) {
           config.config = guard.config;
         }
@@ -780,8 +780,8 @@ export const parseSecurityGuardsFromConfig = (configGuards: any[]): SecurityGuar
           ...baseGuard,
           type: "wasm" as const,
           module_path: config.module_path || "",
-          max_memory_bytes: config.max_memory_bytes ?? 10 * 1024 * 1024,
-          max_fuel: config.max_fuel ?? 1_000_000,
+          max_memory: config.max_memory ?? 10 * 1024 * 1024,
+          max_wasm_stack: config.max_wasm_stack ?? 2 * 1024 * 1024,
           config: config.config || {},
         };
 

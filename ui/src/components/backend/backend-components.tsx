@@ -1227,11 +1227,11 @@ const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
                               type="number"
                               min={1}
                               max={1024}
-                              value={Math.round(guard.max_memory_bytes / (1024 * 1024))}
+                              value={Math.round(guard.max_memory / (1024 * 1024))}
                               onChange={(e) =>
                                 updateSecurityGuardField(
                                   index,
-                                  "max_memory_bytes",
+                                  "max_memory",
                                   (parseInt(e.target.value) || 10) * 1024 * 1024
                                 )
                               }
@@ -1239,18 +1239,18 @@ const SecurityGuardsSection: React.FC<SecurityGuardsSectionProps> = ({
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">Max Fuel (instructions)</Label>
+                            <Label className="text-xs">Max WASM Stack (MB)</Label>
                             <Input
                               type="number"
-                              min={10000}
-                              max={100000000}
-                              step={100000}
-                              value={guard.max_fuel}
+                              min={1}
+                              max={64}
+                              step={1}
+                              value={Math.round(guard.max_wasm_stack / (1024 * 1024))}
                               onChange={(e) =>
                                 updateSecurityGuardField(
                                   index,
-                                  "max_fuel",
-                                  parseInt(e.target.value) || 1000000
+                                  "max_wasm_stack",
+                                  (parseInt(e.target.value) || 2) * 1024 * 1024
                                 )
                               }
                               className="h-8 text-sm"
@@ -1561,14 +1561,6 @@ const McpBackendForm: React.FC<McpBackendFormProps> = ({
         Enable stateful mode
       </Label>
     </div>
-
-    {/* Security Guards */}
-    <SecurityGuardsSection
-      guards={backendForm.securityGuards}
-      addSecurityGuard={addSecurityGuard}
-      removeSecurityGuard={removeSecurityGuard}
-      updateSecurityGuardField={updateSecurityGuardField}
-    />
   </div>
 );
 
