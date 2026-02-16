@@ -7220,6 +7220,11 @@
                                               "description": "Execution phase for guards",
                                               "oneOf": [
                                                 {
+                                                  "description": "Before establishing connection to MCP server\nUsed for server whitelisting, typosquat detection, TLS validation",
+                                                  "type": "string",
+                                                  "const": "connection"
+                                                },
+                                                {
                                                   "description": "Before forwarding client request to MCP server",
                                                   "type": "string",
                                                   "const": "request"
