@@ -109,7 +109,10 @@ pub async fn run(config: Arc<Config>) -> anyhow::Result<Bound> {
 	.await
 	.context("admin server starts")?;
 	#[cfg(feature = "ui")]
-	admin_server.set_admin_handler(Arc::new(crate::ui::UiHandler::new(config.clone())));
+	admin_server.set_admin_handler(Arc::new(crate::ui::UiHandler::new(
+		config.clone(),
+		stores.guard_registry.clone(),
+	)));
 	#[cfg(feature = "ui")]
 	info!("serving UI at http://{}/ui", config.admin_addr);
 

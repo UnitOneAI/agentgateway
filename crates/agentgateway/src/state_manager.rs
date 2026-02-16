@@ -195,12 +195,42 @@ impl LocalClient {
 		.await?;
 		info!("loaded config from {:?}", self.cfg);
 
+		// Extract MCP backend guard configs before sync_local consumes backends
+		let mcp_guard_configs: Vec<_> = config
+			.backends
+			.iter()
+			.filter_map(|bwp| {
+				if let crate::types::agent::Backend::MCP(_, mcp) = &bwp.backend {
+					let backend_name = bwp.backend.name().to_string();
+					Some((backend_name, mcp.security_guards.clone()))
+				} else {
+					None
+				}
+			})
+			.collect();
+
 		// Sync the state
 		let next_binds =
 			self
 				.stores
 				.binds
 				.sync_local(config.binds, config.policies, config.backends, prev.binds);
+
+		// Hot-reload security guards for MCP backends
+		for (backend_name, guards) in mcp_guard_configs {
+			if let Err(e) = self
+				.stores
+				.guard_registry
+				.update_backend(&backend_name, guards)
+			{
+				warn!(
+					backend = %backend_name,
+					error = %e,
+					"Failed to hot-reload security guards"
+				);
+			}
+		}
+
 		let next_discovery =
 			self
 				.stores

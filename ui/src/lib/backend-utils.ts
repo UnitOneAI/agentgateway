@@ -548,6 +548,15 @@ export const convertSecurityGuardsToConfig = (guards: SecurityGuard[]): any[] =>
           config.rejection_message = guard.rejection_message;
         }
         break;
+
+      case "wasm":
+        config.module_path = guard.module_path;
+        config.max_memory = guard.max_memory;
+        config.max_wasm_stack = guard.max_wasm_stack;
+        if (guard.config && Object.keys(guard.config).length > 0) {
+          config.config = guard.config;
+        }
+        break;
     }
 
     return config;
@@ -764,6 +773,16 @@ export const parseSecurityGuardsFromConfig = (configGuards: any[]): SecurityGuar
           action: (config.action || "mask") as PiiAction,
           min_score: config.min_score ?? 0.3,
           rejection_message: config.rejection_message || "",
+        };
+
+      case "wasm":
+        return {
+          ...baseGuard,
+          type: "wasm" as const,
+          module_path: config.module_path || "",
+          max_memory: config.max_memory ?? 10 * 1024 * 1024,
+          max_wasm_stack: config.max_wasm_stack ?? 2 * 1024 * 1024,
+          config: config.config || {},
         };
 
       default:

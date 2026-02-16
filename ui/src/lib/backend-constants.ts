@@ -48,7 +48,7 @@ export const DEFAULT_BACKEND_FORM = {
 
 export const DEFAULT_MCP_TARGET = {
   name: "",
-  type: "sse" as const,
+  type: "mcp" as const,
   host: "",
   port: "",
   path: "",
@@ -187,8 +187,8 @@ export const DEFAULT_WASM_GUARD: WasmGuard = {
   type: "wasm",
   runs_on: ["response", "tools_list"],
   module_path: "",
-  max_memory_bytes: 10 * 1024 * 1024, // 10 MB
-  max_fuel: 1_000_000, // 1 million instructions
+  max_memory: 10 * 1024 * 1024, // 10 MB
+  max_wasm_stack: 2 * 1024 * 1024, // 2 MB
   config: {},
 };
 
@@ -232,6 +232,7 @@ export const SECURITY_GUARD_TYPES: Array<{
 
 // Guard phases for UI selection
 export const GUARD_PHASES: Array<{ value: GuardPhase; label: string }> = [
+  { value: "connection", label: "Connection" },
   { value: "request", label: "Request" },
   { value: "response", label: "Response" },
   { value: "tools_list", label: "Tools List" },

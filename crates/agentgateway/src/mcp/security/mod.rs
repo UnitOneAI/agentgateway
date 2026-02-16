@@ -98,6 +98,10 @@ pub enum McpGuardKind {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum GuardPhase {
+	/// Before establishing connection to MCP server
+	/// Used for server whitelisting, typosquat detection, TLS validation
+	Connection,
+
 	/// Before forwarding client request to MCP server
 	#[default]
 	Request,
@@ -297,6 +301,30 @@ impl GuardExecutorRegistry {
 		let executors = self.executors.read().expect("registry lock poisoned");
 		executors.keys().cloned().collect()
 	}
+
+	/// Collect schemas from all WASM guards across all backends.
+	/// Returns a map of guard_id -> (settings_schema_json, default_config_json).
+	pub fn collect_wasm_schemas(&self) -> HashMap<String, WasmGuardSchema> {
+		let executors = self.executors.read().expect("registry lock poisoned");
+		let mut schemas = HashMap::new();
+
+		for (_backend_name, executor) in executors.iter() {
+			for entry in executor.collect_guard_schemas() {
+				schemas.insert(entry.0, entry.1);
+			}
+		}
+
+		schemas
+	}
+}
+
+/// Schema information returned by a WASM guard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmGuardSchema {
+	/// JSON Schema describing guard's configurable parameters
+	pub settings_schema: serde_json::Value,
+	/// Default configuration values
+	pub default_config: serde_json::Value,
 }
 
 /// Guard executor that manages and executes security guards in priority order
@@ -388,6 +416,64 @@ impl GuardExecutor {
 		*guards = new_guards;
 		tracing::info!("Security guards updated via hot-reload");
 		Ok(())
+	}
+
+	/// Execute guards before establishing connection to an MCP server
+	/// Used for server whitelisting, typosquat detection, TLS validation
+	pub fn evaluate_connection(
+		&self,
+		server_name: &str,
+		server_url: Option<&str>,
+		context: &GuardContext,
+	) -> GuardResult {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		tracing::info!(
+			guard_count = guards.len(),
+			server = %server_name,
+			server_url = ?server_url,
+			"GuardExecutor::evaluate_connection called"
+		);
+		for guard_entry in guards.iter() {
+			// Only run guards configured for Connection phase
+			if !guard_entry.config.runs_on.contains(&GuardPhase::Connection) {
+				continue;
+			}
+
+			// Execute guard with timeout
+			let result = self.execute_with_timeout(
+				|| {
+					guard_entry
+						.guard
+						.evaluate_connection(server_name, server_url, context)
+				},
+				Duration::from_millis(guard_entry.config.timeout_ms),
+				&guard_entry.config,
+			);
+
+			// Handle result based on failure mode
+			match result {
+				Ok(GuardDecision::Allow) => continue,
+				Ok(decision) => return Ok(decision),
+				Err(e) => match guard_entry.config.failure_mode {
+					FailureMode::FailClosed => {
+						return Err(GuardError::ExecutionError(format!(
+							"Guard {} failed: {}",
+							guard_entry.config.id, e
+						)));
+					},
+					FailureMode::FailOpen => {
+						tracing::warn!(
+							"Guard {} failed but continuing due to fail_open: {}",
+							guard_entry.config.id,
+							e
+						);
+						continue;
+					},
+				},
+			}
+		}
+
+		Ok(GuardDecision::Allow)
 	}
 
 	/// Execute guards on a tools/list response
@@ -573,6 +659,36 @@ impl GuardExecutor {
 		// TODO: Implement actual timeout mechanism using tokio::time::timeout
 		// For now, just execute synchronously
 		f()
+	}
+
+	/// Collect schemas from guards that support dynamic schema export (WASM guards).
+	/// Returns a list of (guard_id, WasmGuardSchema) pairs.
+	pub fn collect_guard_schemas(&self) -> Vec<(String, WasmGuardSchema)> {
+		let guards = self.guards.read().expect("guards lock poisoned");
+		let mut schemas = Vec::new();
+
+		for guard_entry in guards.iter() {
+			if let Some(schema_json) = guard_entry.guard.get_settings_schema() {
+				let settings_schema: serde_json::Value =
+					serde_json::from_str(&schema_json).unwrap_or(serde_json::Value::Null);
+
+				let default_config: serde_json::Value = guard_entry
+					.guard
+					.get_default_config()
+					.and_then(|s| serde_json::from_str(&s).ok())
+					.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+				schemas.push((
+					guard_entry.config.id.clone(),
+					WasmGuardSchema {
+						settings_schema,
+						default_config,
+					},
+				));
+			}
+		}
+
+		schemas
 	}
 
 	/// Reset state for a server (called on session re-initialization)
