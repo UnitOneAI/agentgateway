@@ -177,7 +177,10 @@ impl Relay {
 				identity: None,
 				metadata: serde_json::Value::Null,
 			};
-			match self.security_guards.evaluate_connection(&server_name, None, &context) {
+			match self
+				.security_guards
+				.evaluate_connection(&server_name, None, &context)
+			{
 				Ok(crate::mcp::security::GuardDecision::Allow) => {
 					tracing::info!(server = %server_name, "Connection guard: allowed");
 				},

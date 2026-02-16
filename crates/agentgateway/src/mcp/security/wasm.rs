@@ -625,20 +625,17 @@ impl NativeGuard for WasmGuard {
 				})?;
 
 			// Try to get evaluate-tool-invoke — if not exported, allow (backward compat)
-			let func_export_idx = match instance.get_export(
-				&mut store,
-				Some(&guard_export_idx),
-				"evaluate-tool-invoke",
-			) {
-				Some(idx) => idx,
-				None => {
-					tracing::debug!(
-						guard_id = %self.guard_id,
-						"WASM guard does not export evaluate-tool-invoke, allowing"
-					);
-					return Ok(GuardDecision::Allow);
-				},
-			};
+			let func_export_idx =
+				match instance.get_export(&mut store, Some(&guard_export_idx), "evaluate-tool-invoke") {
+					Some(idx) => idx,
+					None => {
+						tracing::debug!(
+							guard_id = %self.guard_id,
+							"WASM guard does not export evaluate-tool-invoke, allowing"
+						);
+						return Ok(GuardDecision::Allow);
+					},
+				};
 
 			let func = instance
 				.get_func(&mut store, &func_export_idx)
@@ -715,20 +712,17 @@ impl NativeGuard for WasmGuard {
 				})?;
 
 			// Try to get evaluate-response — if not exported, allow (backward compat)
-			let func_export_idx = match instance.get_export(
-				&mut store,
-				Some(&guard_export_idx),
-				"evaluate-response",
-			) {
-				Some(idx) => idx,
-				None => {
-					tracing::debug!(
-						guard_id = %self.guard_id,
-						"WASM guard does not export evaluate-response, allowing"
-					);
-					return Ok(GuardDecision::Allow);
-				},
-			};
+			let func_export_idx =
+				match instance.get_export(&mut store, Some(&guard_export_idx), "evaluate-response") {
+					Some(idx) => idx,
+					None => {
+						tracing::debug!(
+							guard_id = %self.guard_id,
+							"WASM guard does not export evaluate-response, allowing"
+						);
+						return Ok(GuardDecision::Allow);
+					},
+				};
 
 			let func = instance
 				.get_func(&mut store, &func_export_idx)

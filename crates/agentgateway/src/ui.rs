@@ -209,7 +209,10 @@ fn collect_wasm_schemas_from_config(config: &Value, schemas: &mut serde_json::Ma
 
 /// Extract schemas from a list of guard config values.
 #[allow(unused_variables)]
-fn collect_wasm_schemas_from_guards(guards: &[Value], schemas: &mut serde_json::Map<String, Value>) {
+fn collect_wasm_schemas_from_guards(
+	guards: &[Value],
+	schemas: &mut serde_json::Map<String, Value>,
+) {
 	for guard_val in guards {
 		let Some(guard_type) = guard_val.get("type").and_then(|v| v.as_str()) else {
 			continue;
