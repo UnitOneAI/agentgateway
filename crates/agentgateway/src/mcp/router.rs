@@ -148,6 +148,19 @@ impl App {
 						"MCP auth configured; validating Authorization header (mode={:?})",
 						auth.mode
 					);
+					// When mcpAuthentication is configured, always require an Authorization
+					// header — even in permissive mode. This ensures the gateway returns
+					// 401 + WWW-Authenticate on the first unauthenticated request, triggering
+					// OAuth discovery. Without this, permissive mode would silently forward
+					// unauthenticated requests to the upstream, which returns its own 401
+					// with the upstream's URL (not the gateway's), breaking the OAuth flow.
+					if req.headers().get(http::header::AUTHORIZATION).is_none() {
+						return Err(Self::create_auth_required_response(
+							ProxyError::ProcessingString("missing authorization header".to_string()),
+							&req,
+							auth,
+						));
+					}
 					auth
 						.jwt_validator
 						.apply(None, &mut req)
