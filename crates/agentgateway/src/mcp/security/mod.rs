@@ -476,7 +476,9 @@ impl GuardExecutor {
 		Ok(GuardDecision::Allow)
 	}
 
-	/// Execute guards on a tools/list response
+	/// Execute guards on a tools/list response.
+	/// Deny short-circuits the chain. Modify is noted and the chain continues
+	/// (subsequent guards still see the original tool list).
 	pub fn evaluate_tools_list(
 		&self,
 		tools: &[rmcp::model::Tool],
@@ -489,6 +491,9 @@ impl GuardExecutor {
 			server = %context.server_name,
 			"GuardExecutor::evaluate_tools_list called"
 		);
+
+		let mut last_modify: Option<GuardDecision> = None;
+
 		for guard_entry in guards.iter() {
 			// Only run guards configured for ToolsList or Response phase
 			if !guard_entry.config.runs_on.contains(&GuardPhase::ToolsList)
@@ -507,7 +512,15 @@ impl GuardExecutor {
 			// Handle result based on failure mode
 			match result {
 				Ok(GuardDecision::Allow) => continue,
-				Ok(decision) => return Ok(decision),
+				Ok(GuardDecision::Deny(reason)) => return Ok(GuardDecision::Deny(reason)),
+				Ok(modify @ GuardDecision::Modify(_)) => {
+					tracing::debug!(
+						guard_id = %guard_entry.config.id,
+						"Guard requested tools_list modification, continuing chain"
+					);
+					last_modify = Some(modify);
+					continue;
+				},
 				Err(e) => match guard_entry.config.failure_mode {
 					FailureMode::FailClosed => {
 						return Err(GuardError::ExecutionError(format!(
@@ -527,10 +540,16 @@ impl GuardExecutor {
 			}
 		}
 
-		Ok(GuardDecision::Allow)
+		if let Some(modify) = last_modify {
+			Ok(modify)
+		} else {
+			Ok(GuardDecision::Allow)
+		}
 	}
 
-	/// Execute guards on a tool invocation (tools/call)
+	/// Execute guards on a tool invocation (tools/call).
+	/// Modify decisions are accumulated: the modified arguments are passed to subsequent guards.
+	/// Only Deny short-circuits the chain immediately.
 	pub fn evaluate_tool_invoke(
 		&self,
 		tool_name: &str,
@@ -545,6 +564,10 @@ impl GuardExecutor {
 			arguments = %arguments,
 			"GuardExecutor::evaluate_tool_invoke called"
 		);
+
+		let mut current_arguments = std::borrow::Cow::Borrowed(arguments);
+		let mut was_modified = false;
+
 		for guard_entry in guards.iter() {
 			tracing::info!(
 				guard_id = %guard_entry.config.id,
@@ -559,12 +582,12 @@ impl GuardExecutor {
 				continue;
 			}
 
-			// Execute guard with timeout
+			// Execute guard with timeout, passing the (possibly modified) arguments
 			let result = self.execute_with_timeout(
 				|| {
 					guard_entry
 						.guard
-						.evaluate_tool_invoke(tool_name, arguments, context)
+						.evaluate_tool_invoke(tool_name, &current_arguments, context)
 				},
 				Duration::from_millis(guard_entry.config.timeout_ms),
 				&guard_entry.config,
@@ -573,7 +596,24 @@ impl GuardExecutor {
 			// Handle result based on failure mode
 			match result {
 				Ok(GuardDecision::Allow) => continue,
-				Ok(decision) => return Ok(decision),
+				Ok(GuardDecision::Deny(reason)) => return Ok(GuardDecision::Deny(reason)),
+				Ok(GuardDecision::Modify(ModifyAction::Transform(modified))) => {
+					tracing::debug!(
+						guard_id = %guard_entry.config.id,
+						"Guard modified tool arguments, continuing chain with modified value"
+					);
+					current_arguments = std::borrow::Cow::Owned(modified);
+					was_modified = true;
+					continue;
+				},
+				Ok(GuardDecision::Modify(_other)) => {
+					tracing::debug!(
+						guard_id = %guard_entry.config.id,
+						"Guard returned non-transform modification, continuing chain"
+					);
+					was_modified = true;
+					continue;
+				},
 				Err(e) => match guard_entry.config.failure_mode {
 					FailureMode::FailClosed => {
 						return Err(GuardError::ExecutionError(format!(
@@ -593,10 +633,18 @@ impl GuardExecutor {
 			}
 		}
 
-		Ok(GuardDecision::Allow)
+		if was_modified {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(
+				current_arguments.into_owned(),
+			)))
+		} else {
+			Ok(GuardDecision::Allow)
+		}
 	}
 
-	/// Execute guards on a response
+	/// Execute guards on a response.
+	/// Modify decisions are accumulated: the modified value is passed to subsequent guards.
+	/// Only Deny short-circuits the chain immediately.
 	pub fn evaluate_response(
 		&self,
 		response: &serde_json::Value,
@@ -608,15 +656,19 @@ impl GuardExecutor {
 			server = %context.server_name,
 			"GuardExecutor::evaluate_response called"
 		);
+
+		let mut current_response = std::borrow::Cow::Borrowed(response);
+		let mut was_modified = false;
+
 		for guard_entry in guards.iter() {
 			// Only run guards configured for Response phase
 			if !guard_entry.config.runs_on.contains(&GuardPhase::Response) {
 				continue;
 			}
 
-			// Execute guard with timeout
+			// Execute guard with timeout, passing the (possibly modified) response
 			let result = self.execute_with_timeout(
-				|| guard_entry.guard.evaluate_response(response, context),
+				|| guard_entry.guard.evaluate_response(&current_response, context),
 				Duration::from_millis(guard_entry.config.timeout_ms),
 				&guard_entry.config,
 			);
@@ -624,7 +676,25 @@ impl GuardExecutor {
 			// Handle result based on failure mode
 			match result {
 				Ok(GuardDecision::Allow) => continue,
-				Ok(decision) => return Ok(decision),
+				Ok(GuardDecision::Deny(reason)) => return Ok(GuardDecision::Deny(reason)),
+				Ok(GuardDecision::Modify(ModifyAction::Transform(modified))) => {
+					tracing::debug!(
+						guard_id = %guard_entry.config.id,
+						"Guard modified response, continuing chain with modified value"
+					);
+					current_response = std::borrow::Cow::Owned(modified);
+					was_modified = true;
+					continue;
+				},
+				Ok(GuardDecision::Modify(_other)) => {
+					// Non-Transform modifications: note and continue
+					tracing::debug!(
+						guard_id = %guard_entry.config.id,
+						"Guard returned non-transform modification, continuing chain"
+					);
+					was_modified = true;
+					continue;
+				},
 				Err(e) => match guard_entry.config.failure_mode {
 					FailureMode::FailClosed => {
 						return Err(GuardError::ExecutionError(format!(
@@ -644,7 +714,13 @@ impl GuardExecutor {
 			}
 		}
 
-		Ok(GuardDecision::Allow)
+		if was_modified {
+			Ok(GuardDecision::Modify(ModifyAction::Transform(
+				current_response.into_owned(),
+			)))
+		} else {
+			Ok(GuardDecision::Allow)
+		}
 	}
 
 	fn execute_with_timeout<F>(
